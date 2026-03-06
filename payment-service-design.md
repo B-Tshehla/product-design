@@ -759,44 +759,55 @@ public record StripeConfig(
 ### Database Schema
 
 ```sql
--- Tenants
+-- ============================================================================
+-- TENANTS TABLE
+-- Purpose: Stores client projects that use the Payment Service. Each tenant
+--          represents a separate client application (e.g., Billing Service,
+--          eTalente) with complete data isolation and independent payment
+--          processor configurations.
+-- ============================================================================
 CREATE TABLE tenants (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name VARCHAR(255) NOT NULL,
-    api_key VARCHAR(255) NOT NULL UNIQUE,
-    api_secret_hash VARCHAR(255) NOT NULL,
-    processor_config JSONB DEFAULT '{}',
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),                    -- Unique identifier for this tenant
+    name VARCHAR(255) NOT NULL,                                       -- Display name of the client project
+    api_key VARCHAR(255) NOT NULL UNIQUE,                             -- API key for authentication (indexed for fast lookup)
+    api_secret_hash VARCHAR(255) NOT NULL,                            -- Bcrypt hash of API secret for secure credential verification
+    processor_config JSONB DEFAULT '{}',                              -- Payment processor credentials and settings (Stripe keys, PayPal credentials, etc.)
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,                          -- Whether tenant can make API calls (false = suspended)
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),                -- Timestamp when tenant was registered
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()                 -- Timestamp of last tenant configuration update
 );
 
 CREATE INDEX idx_tenants_api_key ON tenants(api_key);
 CREATE INDEX idx_tenants_is_active ON tenants(is_active);
 
--- Payments
+-- ============================================================================
+-- PAYMENTS TABLE
+-- Purpose: Records all payment transactions (one-time and recurring) processed
+--          through the service. Links to payment processors (Stripe, PayPal)
+--          and tracks payment lifecycle from pending to succeeded/failed.
+-- ============================================================================
 CREATE TABLE payments (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    payment_method_id UUID REFERENCES payment_methods(id),
-    idempotency_key VARCHAR(255) NOT NULL UNIQUE,
-    processor_type VARCHAR(50) NOT NULL,
-    processor_payment_id VARCHAR(255),
-    amount DECIMAL(19,4) NOT NULL,
-    currency VARCHAR(3) NOT NULL DEFAULT 'USD',
-    status VARCHAR(50) NOT NULL,
-    payment_type VARCHAR(50) NOT NULL,
-    metadata JSONB DEFAULT '{}',
-    description TEXT,
-    customer_email VARCHAR(255) NOT NULL,
-    customer_name VARCHAR(255) NOT NULL,
-    processed_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),                    -- Unique identifier for this payment
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, -- Tenant that initiated this payment (for multi-tenant isolation)
+    payment_method_id UUID REFERENCES payment_methods(id),            -- Optional payment method used (null if customer provides method at payment time)
+    idempotency_key VARCHAR(255) NOT NULL UNIQUE,                     -- Client-provided key to prevent duplicate charges from retried requests
+    processor_type VARCHAR(50) NOT NULL,                              -- Payment processor used: stripe, paypal, or square
+    processor_payment_id VARCHAR(255),                                -- Payment ID from the external processor (e.g., Stripe charge ID)
+    amount DECIMAL(19,4) NOT NULL,                                    -- Payment amount with 4 decimal precision for accurate currency handling
+    currency VARCHAR(3) NOT NULL DEFAULT 'USD',                       -- ISO 4217 currency code (USD, EUR, GBP, etc.)
+    status VARCHAR(50) NOT NULL,                                      -- Payment status: pending (created), processing (sent to processor), succeeded (completed), failed (declined/error), canceled (voided), requires_action (needs customer action like 3DS)
+    payment_type VARCHAR(50) NOT NULL,                                -- Payment classification: one_time (single charge) or recurring (subscription payment)
+    metadata JSONB DEFAULT '{}',                                      -- Additional custom data from client (e.g., order ID, invoice ID, customer notes)
+    description TEXT,                                                 -- Human-readable payment description shown to customer
+    customer_email VARCHAR(255) NOT NULL,                             -- Customer email for receipts and notifications
+    customer_name VARCHAR(255) NOT NULL,                              -- Customer name for receipts and payment records
+    processed_at TIMESTAMP WITH TIME ZONE,                            -- Timestamp when payment reached terminal status (succeeded/failed)
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),                -- Timestamp when payment was initiated
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),                -- Timestamp of last payment status update
     CONSTRAINT valid_payment_status CHECK (status IN ('pending', 'processing', 'succeeded', 'failed', 'canceled', 'requires_action')),
     CONSTRAINT valid_payment_type CHECK (payment_type IN ('one_time', 'recurring')),
     CONSTRAINT valid_processor_type CHECK (processor_type IN ('stripe', 'paypal', 'square')),
-    CONSTRAINT positive_amount CHECK (amount > 0)
+    CONSTRAINT positive_amount CHECK (amount > 0)                     -- Ensures payment amounts are always positive
 );
 
 CREATE INDEX idx_payments_tenant ON payments(tenant_id);
@@ -806,21 +817,26 @@ CREATE INDEX idx_payments_status ON payments(status);
 CREATE INDEX idx_payments_customer_email ON payments(customer_email);
 CREATE INDEX idx_payments_created ON payments(created_at);
 
--- Payment Methods
+-- ============================================================================
+-- PAYMENT_METHODS TABLE
+-- Purpose: Stores saved payment methods (credit cards, bank accounts) for
+--          customers. Enables recurring payments without re-entering payment
+--          details. Tokenized through payment processors for PCI compliance.
+-- ============================================================================
 CREATE TABLE payment_methods (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    customer_id VARCHAR(255) NOT NULL,
-    processor_type VARCHAR(50) NOT NULL,
-    processor_method_id VARCHAR(255) NOT NULL,
-    method_type VARCHAR(50) NOT NULL,
-    card_details JSONB,
-    bank_details JSONB,
-    is_default BOOLEAN NOT NULL DEFAULT FALSE,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    expires_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),                    -- Unique identifier for this payment method
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, -- Tenant that owns this payment method (for multi-tenant isolation)
+    customer_id VARCHAR(255) NOT NULL,                                -- Customer identifier from client system (e.g., user ID from Billing Service)
+    processor_type VARCHAR(50) NOT NULL,                              -- Payment processor managing this method: stripe, paypal, or square
+    processor_method_id VARCHAR(255) NOT NULL,                        -- Payment method ID from processor (e.g., Stripe payment method ID, PayPal billing agreement ID)
+    method_type VARCHAR(50) NOT NULL,                                 -- Type of payment method: card (credit/debit card), bank_account (ACH/SEPA), digital_wallet (Apple Pay, Google Pay)
+    card_details JSONB,                                               -- Card metadata (brand, last4, exp_month, exp_year, fingerprint) - never stores full card number
+    bank_details JSONB,                                               -- Bank account metadata (bank_name, account_type, last4, routing_number) - never stores full account number
+    is_default BOOLEAN NOT NULL DEFAULT FALSE,                        -- Whether this is the customer's default payment method for automatic charges
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,                          -- Whether this payment method can be used (false = expired or removed)
+    expires_at TIMESTAMP WITH TIME ZONE,                              -- Expiration date for cards (null for non-expiring methods like bank accounts)
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),                -- Timestamp when payment method was added
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),                -- Timestamp of last payment method update
     CONSTRAINT valid_method_type CHECK (method_type IN ('card', 'bank_account', 'digital_wallet')),
     CONSTRAINT valid_processor_type CHECK (processor_type IN ('stripe', 'paypal', 'square'))
 );
@@ -830,23 +846,28 @@ CREATE INDEX idx_payment_methods_customer ON payment_methods(customer_id);
 CREATE INDEX idx_payment_methods_processor_id ON payment_methods(processor_method_id);
 CREATE INDEX idx_payment_methods_is_active ON payment_methods(is_active);
 
--- Refunds
+-- ============================================================================
+-- REFUNDS TABLE
+-- Purpose: Tracks refund transactions for payments. Supports full and partial
+--          refunds with reason tracking for accounting and dispute resolution.
+--          Links to original payment and processor refund records.
+-- ============================================================================
 CREATE TABLE refunds (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    payment_id UUID NOT NULL REFERENCES payments(id) ON DELETE CASCADE,
-    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    idempotency_key VARCHAR(255) NOT NULL UNIQUE,
-    processor_refund_id VARCHAR(255),
-    amount DECIMAL(19,4) NOT NULL,
-    currency VARCHAR(3) NOT NULL DEFAULT 'USD',
-    status VARCHAR(50) NOT NULL,
-    reason TEXT,
-    metadata JSONB DEFAULT '{}',
-    processed_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),                    -- Unique identifier for this refund
+    payment_id UUID NOT NULL REFERENCES payments(id) ON DELETE CASCADE,  -- Original payment being refunded
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, -- Tenant that initiated this refund (for multi-tenant isolation)
+    idempotency_key VARCHAR(255) NOT NULL UNIQUE,                     -- Client-provided key to prevent duplicate refunds from retried requests
+    processor_refund_id VARCHAR(255),                                 -- Refund ID from the external processor (e.g., Stripe refund ID)
+    amount DECIMAL(19,4) NOT NULL,                                    -- Refund amount (can be less than original payment for partial refunds)
+    currency VARCHAR(3) NOT NULL DEFAULT 'USD',                       -- ISO 4217 currency code (must match original payment currency)
+    status VARCHAR(50) NOT NULL,                                      -- Refund status: pending (initiated), processing (sent to processor), succeeded (completed), failed (processor error), canceled (voided before processing)
+    reason TEXT,                                                      -- Reason for refund (e.g., "duplicate charge", "customer request", "fraudulent transaction")
+    metadata JSONB DEFAULT '{}',                                      -- Additional custom data from client (e.g., support ticket ID, refund policy reference)
+    processed_at TIMESTAMP WITH TIME ZONE,                            -- Timestamp when refund reached terminal status (succeeded/failed)
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),                -- Timestamp when refund was initiated
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),                -- Timestamp of last refund status update
     CONSTRAINT valid_refund_status CHECK (status IN ('pending', 'processing', 'succeeded', 'failed', 'canceled')),
-    CONSTRAINT positive_amount CHECK (amount > 0)
+    CONSTRAINT positive_amount CHECK (amount > 0)                     -- Ensures refund amounts are always positive
 );
 
 CREATE INDEX idx_refunds_payment ON refunds(payment_id);
@@ -855,17 +876,22 @@ CREATE INDEX idx_refunds_idempotency ON refunds(idempotency_key);
 CREATE INDEX idx_refunds_processor_id ON refunds(processor_refund_id);
 CREATE INDEX idx_refunds_status ON refunds(status);
 
--- Payment Events
+-- ============================================================================
+-- PAYMENT_EVENTS TABLE
+-- Purpose: Immutable event log of all payment-related state changes. Provides
+--          complete audit trail for debugging, analytics, and event sourcing.
+--          Used to trigger webhooks and track payment lifecycle.
+-- ============================================================================
 CREATE TABLE payment_events (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    payment_id UUID REFERENCES payments(id) ON DELETE CASCADE,
-    refund_id UUID REFERENCES refunds(id) ON DELETE CASCADE,
-    payment_method_id UUID REFERENCES payment_methods(id) ON DELETE CASCADE,
-    event_type VARCHAR(100) NOT NULL,
-    status VARCHAR(50),
-    payload JSONB NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),                    -- Unique identifier for this event
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, -- Tenant context for this event (for multi-tenant isolation)
+    payment_id UUID REFERENCES payments(id) ON DELETE CASCADE,        -- Payment this event relates to (null for non-payment events)
+    refund_id UUID REFERENCES refunds(id) ON DELETE CASCADE,          -- Refund this event relates to (null for non-refund events)
+    payment_method_id UUID REFERENCES payment_methods(id) ON DELETE CASCADE,  -- Payment method this event relates to (null for non-method events)
+    event_type VARCHAR(100) NOT NULL,                                 -- Event type (e.g., "payment.succeeded", "refund.failed", "payment_method.attached")
+    status VARCHAR(50),                                               -- Status value at time of event (e.g., "succeeded", "failed")
+    payload JSONB NOT NULL,                                           -- Full event data snapshot for event replay and debugging
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()                 -- Timestamp when event occurred (immutable, never updated)
 );
 
 CREATE INDEX idx_payment_events_tenant ON payment_events(tenant_id);
@@ -874,30 +900,40 @@ CREATE INDEX idx_payment_events_refund ON payment_events(refund_id);
 CREATE INDEX idx_payment_events_type ON payment_events(event_type);
 CREATE INDEX idx_payment_events_created ON payment_events(created_at);
 
--- Webhook Configurations
+-- ============================================================================
+-- WEBHOOK_CONFIGS TABLE
+-- Purpose: Stores webhook endpoint configurations for each tenant to receive
+--          real-time notifications about payment events. Tenants subscribe to
+--          specific event types and provide HTTPS endpoints for delivery.
+-- ============================================================================
 CREATE TABLE webhook_configs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    url VARCHAR(500) NOT NULL,
-    secret VARCHAR(255) NOT NULL,
-    events JSONB NOT NULL DEFAULT '[]',
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),                    -- Unique identifier for this webhook configuration
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, -- Tenant that owns this webhook endpoint
+    url VARCHAR(500) NOT NULL,                                        -- HTTPS endpoint URL where webhook events will be delivered
+    secret VARCHAR(255) NOT NULL,                                     -- Shared secret for HMAC signature generation (tenant uses this to verify webhook authenticity)
+    events JSONB NOT NULL DEFAULT '[]',                               -- Array of event types to subscribe to (e.g., ["payment.succeeded", "refund.failed"])
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,                          -- Whether webhook deliveries are enabled (false = paused)
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),                -- Timestamp when webhook was configured
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()                 -- Timestamp of last configuration update
 );
 
 CREATE INDEX idx_webhook_configs_tenant ON webhook_configs(tenant_id);
 CREATE INDEX idx_webhook_configs_is_active ON webhook_configs(is_active);
 
--- Webhook Logs
+-- ============================================================================
+-- WEBHOOK_LOGS TABLE
+-- Purpose: Immutable log of all webhook events generated by the system.
+--          Provides audit trail of what events were triggered and when,
+--          independent of delivery success. Used for event replay and debugging.
+-- ============================================================================
 CREATE TABLE webhook_logs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    payment_id UUID REFERENCES payments(id) ON DELETE CASCADE,
-    refund_id UUID REFERENCES refunds(id) ON DELETE CASCADE,
-    event_type VARCHAR(100) NOT NULL,
-    payload JSONB NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),                    -- Unique identifier for this webhook event
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, -- Tenant this event belongs to (for multi-tenant isolation)
+    payment_id UUID REFERENCES payments(id) ON DELETE CASCADE,        -- Payment this event relates to (null for non-payment events)
+    refund_id UUID REFERENCES refunds(id) ON DELETE CASCADE,          -- Refund this event relates to (null for non-refund events)
+    event_type VARCHAR(100) NOT NULL,                                 -- Event type (e.g., "payment.succeeded", "refund.failed", "payment_method.attached")
+    payload JSONB NOT NULL,                                           -- Full event data sent to webhook endpoints
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()                 -- Timestamp when event was generated (immutable)
 );
 
 CREATE INDEX idx_webhook_logs_tenant ON webhook_logs(tenant_id);
@@ -906,32 +942,42 @@ CREATE INDEX idx_webhook_logs_refund ON webhook_logs(refund_id);
 CREATE INDEX idx_webhook_logs_event_type ON webhook_logs(event_type);
 CREATE INDEX idx_webhook_logs_created ON webhook_logs(created_at);
 
--- Webhook Deliveries
+-- ============================================================================
+-- WEBHOOK_DELIVERIES TABLE
+-- Purpose: Tracks individual webhook delivery attempts with retry logic.
+--          Implements exponential backoff for failed deliveries and provides
+--          detailed debugging information for delivery failures.
+-- ============================================================================
 CREATE TABLE webhook_deliveries (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    webhook_log_id UUID NOT NULL REFERENCES webhook_logs(id) ON DELETE CASCADE,
-    url VARCHAR(500) NOT NULL,
-    attempt_number INTEGER NOT NULL DEFAULT 1,
-    response_status INTEGER,
-    response_body TEXT,
-    error_message TEXT,
-    attempted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    next_retry_at TIMESTAMP WITH TIME ZONE
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),                    -- Unique identifier for this delivery attempt
+    webhook_log_id UUID NOT NULL REFERENCES webhook_logs(id) ON DELETE CASCADE,  -- The webhook event being delivered
+    url VARCHAR(500) NOT NULL,                                        -- Target endpoint URL for this delivery attempt
+    attempt_number INTEGER NOT NULL DEFAULT 1,                        -- Delivery attempt number (1 = first attempt, increments on retries)
+    response_status INTEGER,                                          -- HTTP status code from webhook endpoint (e.g., 200, 500, null if network error)
+    response_body TEXT,                                               -- Response body from webhook endpoint for debugging
+    error_message TEXT,                                               -- Error message if delivery failed (network error, timeout, etc.)
+    attempted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),              -- Timestamp when this delivery attempt was made
+    next_retry_at TIMESTAMP WITH TIME ZONE                            -- Timestamp for next retry attempt (null if succeeded or retries exhausted)
 );
 
 CREATE INDEX idx_webhook_deliveries_log ON webhook_deliveries(webhook_log_id);
 CREATE INDEX idx_webhook_deliveries_retry ON webhook_deliveries(next_retry_at) WHERE next_retry_at IS NOT NULL;
 
--- Idempotency Keys
+-- ============================================================================
+-- IDEMPOTENCY_KEYS TABLE
+-- Purpose: Prevents duplicate operations from repeated API requests. Stores
+--          request fingerprints and cached responses to ensure exactly-once
+--          semantics for critical operations like payment processing.
+-- ============================================================================
 CREATE TABLE idempotency_keys (
-    key VARCHAR(255) PRIMARY KEY,
-    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    request_path VARCHAR(255) NOT NULL,
-    request_hash VARCHAR(64) NOT NULL,
-    response_status INTEGER,
-    response_body JSONB,
-    expires_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() + INTERVAL '24 hours',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    key VARCHAR(255) PRIMARY KEY,                                     -- Client-provided idempotency key (unique identifier for this operation)
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, -- Tenant that made this request (for multi-tenant isolation)
+    request_path VARCHAR(255) NOT NULL,                               -- API endpoint path (e.g., "/api/v1/payments") for request matching
+    request_hash VARCHAR(64) NOT NULL,                                -- SHA-256 hash of request body to detect parameter changes with same idempotency key
+    response_status INTEGER,                                          -- HTTP status code of cached response (e.g., 200, 201, 400)
+    response_body JSONB,                                              -- Cached response body to return for duplicate requests
+    expires_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() + INTERVAL '24 hours',  -- Expiration timestamp (keys auto-expire after 24 hours)
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()                 -- Timestamp when this idempotency key was first used
 );
 
 CREATE INDEX idx_idempotency_expires ON idempotency_keys(expires_at);
@@ -1255,6 +1301,533 @@ public class RefundServiceImpl implements RefundService {
             .reduce(BigDecimal.ZERO, BigDecimal::add);
         
         return payment.getAmount().subtract(totalRefunded);
+    }
+}
+```
+
+
+## API Endpoints
+
+### Payment Endpoints
+
+```java
+@RestController
+@RequestMapping("/api/v1/payments")
+public class PaymentController {
+    private final PaymentService paymentService;
+    
+    public PaymentController(PaymentService paymentService) {
+        this.paymentService = paymentService;
+    }
+    
+    // POST /api/v1/payments - Create a new payment
+    @PostMapping
+    public ResponseEntity<PaymentResponse> createPayment(
+            @RequestHeader("X-Tenant-ID") UUID tenantId,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @Valid @RequestBody CreatePaymentRequest request) {
+        request.setIdempotencyKey(idempotencyKey);
+        PaymentResponse response = paymentService.createPayment(tenantId, request);
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+    
+    // GET /api/v1/payments/{id} - Get payment by ID
+    @GetMapping("/{id}")
+    public ResponseEntity<PaymentResponse> getPayment(
+            @RequestHeader("X-Tenant-ID") UUID tenantId,
+            @PathVariable UUID id) {
+        PaymentResponse response = paymentService.getPayment(id, tenantId);
+        return ResponseEntity.ok(response);
+    }
+    
+    // GET /api/v1/payments - List payments with filters
+    @GetMapping
+    public ResponseEntity<Page<PaymentResponse>> listPayments(
+            @RequestHeader("X-Tenant-ID") UUID tenantId,
+            @RequestParam(required = false) String customerEmail,
+            @RequestParam(required = false) PaymentStatus status,
+            @RequestParam(required = false) PaymentType paymentType,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        PaymentFilters filters = PaymentFilters.builder()
+            .customerEmail(customerEmail)
+            .status(status)
+            .paymentType(paymentType)
+            .build();
+        Page<PaymentResponse> response = paymentService.listPayments(
+            filters, tenantId, PageRequest.of(page, size));
+        return ResponseEntity.ok(response);
+    }
+    
+    // POST /api/v1/payments/{id}/cancel - Cancel a payment
+    @PostMapping("/{id}/cancel")
+    public ResponseEntity<PaymentResponse> cancelPayment(
+            @RequestHeader("X-Tenant-ID") UUID tenantId,
+            @PathVariable UUID id) {
+        PaymentResponse response = paymentService.cancelPayment(id, tenantId);
+        return ResponseEntity.ok(response);
+    }
+}
+```
+
+### Payment Method Endpoints
+
+```java
+@RestController
+@RequestMapping("/api/v1/payment-methods")
+public class PaymentMethodController {
+    private final PaymentMethodService paymentMethodService;
+    
+    public PaymentMethodController(PaymentMethodService paymentMethodService) {
+        this.paymentMethodService = paymentMethodService;
+    }
+    
+    // POST /api/v1/payment-methods - Create a new payment method
+    @PostMapping
+    public ResponseEntity<PaymentMethodResponse> createPaymentMethod(
+            @RequestHeader("X-Tenant-ID") UUID tenantId,
+            @Valid @RequestBody CreatePaymentMethodRequest request) {
+        PaymentMethodResponse response = paymentMethodService.create(tenantId, request);
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+    
+    // GET /api/v1/payment-methods/{id} - Get payment method by ID
+    @GetMapping("/{id}")
+    public ResponseEntity<PaymentMethodResponse> getPaymentMethod(
+            @RequestHeader("X-Tenant-ID") UUID tenantId,
+            @PathVariable UUID id) {
+        PaymentMethodResponse response = paymentMethodService.get(id, tenantId);
+        return ResponseEntity.ok(response);
+    }
+    
+    // GET /api/v1/payment-methods - List payment methods for a customer
+    @GetMapping
+    public ResponseEntity<List<PaymentMethodResponse>> listPaymentMethods(
+            @RequestHeader("X-Tenant-ID") UUID tenantId,
+            @RequestParam String customerId) {
+        List<PaymentMethodResponse> response = paymentMethodService.listByCustomer(customerId, tenantId);
+        return ResponseEntity.ok(response);
+    }
+    
+    // PUT /api/v1/payment-methods/{id} - Update payment method
+    @PutMapping("/{id}")
+    public ResponseEntity<PaymentMethodResponse> updatePaymentMethod(
+            @RequestHeader("X-Tenant-ID") UUID tenantId,
+            @PathVariable UUID id,
+            @Valid @RequestBody UpdatePaymentMethodRequest request) {
+        PaymentMethodResponse response = paymentMethodService.update(id, tenantId, request);
+        return ResponseEntity.ok(response);
+    }
+    
+    // DELETE /api/v1/payment-methods/{id} - Delete payment method
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> deletePaymentMethod(
+            @RequestHeader("X-Tenant-ID") UUID tenantId,
+            @PathVariable UUID id) {
+        paymentMethodService.delete(id, tenantId);
+        return ResponseEntity.noContent().build();
+    }
+    
+    // POST /api/v1/payment-methods/{id}/set-default - Set as default payment method
+    @PostMapping("/{id}/set-default")
+    public ResponseEntity<PaymentMethodResponse> setDefaultPaymentMethod(
+            @RequestHeader("X-Tenant-ID") UUID tenantId,
+            @PathVariable UUID id,
+            @RequestParam String customerId) {
+        PaymentMethodResponse response = paymentMethodService.setDefault(id, customerId, tenantId);
+        return ResponseEntity.ok(response);
+    }
+}
+```
+
+### Refund Endpoints
+
+```java
+@RestController
+@RequestMapping("/api/v1/refunds")
+public class RefundController {
+    private final RefundService refundService;
+    
+    public RefundController(RefundService refundService) {
+        this.refundService = refundService;
+    }
+    
+    // POST /api/v1/refunds - Create a new refund
+    @PostMapping
+    public ResponseEntity<RefundResponse> createRefund(
+            @RequestHeader("X-Tenant-ID") UUID tenantId,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @Valid @RequestBody CreateRefundRequest request) {
+        request.setIdempotencyKey(idempotencyKey);
+        RefundResponse response = refundService.createRefund(tenantId, request);
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+    
+    // GET /api/v1/refunds/{id} - Get refund by ID
+    @GetMapping("/{id}")
+    public ResponseEntity<RefundResponse> getRefund(
+            @RequestHeader("X-Tenant-ID") UUID tenantId,
+            @PathVariable UUID id) {
+        RefundResponse response = refundService.getRefund(id, tenantId);
+        return ResponseEntity.ok(response);
+    }
+    
+    // GET /api/v1/refunds - List refunds with filters
+    @GetMapping
+    public ResponseEntity<Page<RefundResponse>> listRefunds(
+            @RequestHeader("X-Tenant-ID") UUID tenantId,
+            @RequestParam(required = false) UUID paymentId,
+            @RequestParam(required = false) RefundStatus status,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        RefundFilters filters = RefundFilters.builder()
+            .paymentId(paymentId)
+            .status(status)
+            .build();
+        Page<RefundResponse> response = refundService.listRefunds(
+            filters, tenantId, PageRequest.of(page, size));
+        return ResponseEntity.ok(response);
+    }
+}
+```
+
+### Tenant Management Endpoints
+
+```java
+@RestController
+@RequestMapping("/api/v1/tenants")
+public class TenantController {
+    private final TenantService tenantService;
+    
+    public TenantController(TenantService tenantService) {
+        this.tenantService = tenantService;
+    }
+    
+    // POST /api/v1/tenants - Register a new tenant
+    @PostMapping
+    public ResponseEntity<TenantResponse> registerTenant(
+            @Valid @RequestBody RegisterTenantRequest request) {
+        TenantResponse response = tenantService.register(request);
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+    
+    // GET /api/v1/tenants/{id} - Get tenant by ID
+    @GetMapping("/{id}")
+    public ResponseEntity<TenantResponse> getTenant(@PathVariable UUID id) {
+        TenantResponse response = tenantService.get(id);
+        return ResponseEntity.ok(response);
+    }
+    
+    // PUT /api/v1/tenants/{id} - Update tenant configuration
+    @PutMapping("/{id}")
+    public ResponseEntity<TenantResponse> updateTenant(
+            @PathVariable UUID id,
+            @Valid @RequestBody UpdateTenantRequest request) {
+        TenantResponse response = tenantService.update(id, request);
+        return ResponseEntity.ok(response);
+    }
+    
+    // POST /api/v1/tenants/{id}/rotate-api-key - Rotate API key
+    @PostMapping("/{id}/rotate-api-key")
+    public ResponseEntity<ApiKeyResponse> rotateApiKey(@PathVariable UUID id) {
+        ApiKeyResponse response = tenantService.rotateApiKey(id);
+        return ResponseEntity.ok(response);
+    }
+}
+```
+
+### Webhook Configuration Endpoints
+
+```java
+@RestController
+@RequestMapping("/api/v1/webhooks")
+public class WebhookController {
+    private final WebhookService webhookService;
+    
+    public WebhookController(WebhookService webhookService) {
+        this.webhookService = webhookService;
+    }
+    
+    // POST /api/v1/webhooks - Create webhook configuration
+    @PostMapping
+    public ResponseEntity<WebhookConfigResponse> createWebhook(
+            @RequestHeader("X-Tenant-ID") UUID tenantId,
+            @Valid @RequestBody CreateWebhookConfigRequest request) {
+        WebhookConfigResponse response = webhookService.create(tenantId, request);
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+    
+    // GET /api/v1/webhooks - List webhook configurations
+    @GetMapping
+    public ResponseEntity<List<WebhookConfigResponse>> listWebhooks(
+            @RequestHeader("X-Tenant-ID") UUID tenantId) {
+        List<WebhookConfigResponse> response = webhookService.list(tenantId);
+        return ResponseEntity.ok(response);
+    }
+    
+    // PUT /api/v1/webhooks/{id} - Update webhook configuration
+    @PutMapping("/{id}")
+    public ResponseEntity<WebhookConfigResponse> updateWebhook(
+            @RequestHeader("X-Tenant-ID") UUID tenantId,
+            @PathVariable UUID id,
+            @Valid @RequestBody UpdateWebhookConfigRequest request) {
+        WebhookConfigResponse response = webhookService.update(id, tenantId, request);
+        return ResponseEntity.ok(response);
+    }
+    
+    // DELETE /api/v1/webhooks/{id} - Delete webhook configuration
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> deleteWebhook(
+            @RequestHeader("X-Tenant-ID") UUID tenantId,
+            @PathVariable UUID id) {
+        webhookService.delete(id, tenantId);
+        return ResponseEntity.noContent().build();
+    }
+    
+    // POST /webhooks/stripe - Stripe webhook receiver (public endpoint)
+    @PostMapping("/stripe")
+    public ResponseEntity<Void> handleStripeWebhook(
+            @RequestBody String payload,
+            @RequestHeader("Stripe-Signature") String signature) {
+        webhookService.handleStripeWebhook(payload, signature);
+        return ResponseEntity.ok().build();
+    }
+    
+    // POST /webhooks/paypal - PayPal webhook receiver (public endpoint)
+    @PostMapping("/paypal")
+    public ResponseEntity<Void> handlePayPalWebhook(
+            @RequestBody String payload,
+            @RequestHeader("PAYPAL-TRANSMISSION-SIG") String signature) {
+        webhookService.handlePayPalWebhook(payload, signature);
+        return ResponseEntity.ok().build();
+    }
+}
+```
+
+
+## Webhook System
+
+### Webhook Architecture
+
+The Payment Service implements a robust webhook system for notifying client applications (like Billing Service) about payment events in real-time. The system handles both incoming webhooks from payment processors (Stripe, PayPal) and outgoing webhooks to client applications.
+
+```mermaid
+graph TB
+    subgraph "External Processors"
+        STRIPE[Stripe]
+        PAYPAL[PayPal]
+    end
+    
+    subgraph "Payment Service"
+        PROC_WH[Processor Webhook Receiver]
+        EVENT_BUS[Event Bus]
+        WH_DISPATCHER[Webhook Dispatcher]
+        WH_QUEUE[Webhook Queue]
+        WH_WORKER[Webhook Worker]
+        RETRY[Retry Scheduler]
+    end
+    
+    subgraph "Client Applications"
+        BILLING[Billing Service]
+        APP1[Client App 1]
+    end
+    
+    STRIPE -.->|POST /webhooks/stripe| PROC_WH
+    PAYPAL -.->|POST /webhooks/paypal| PROC_WH
+    
+    PROC_WH --> EVENT_BUS
+    EVENT_BUS --> WH_DISPATCHER
+    WH_DISPATCHER --> WH_QUEUE
+    WH_QUEUE --> WH_WORKER
+    WH_WORKER -.->|HTTPS POST| BILLING
+    WH_WORKER -.->|HTTPS POST| APP1
+    WH_WORKER -->|Failed| RETRY
+    RETRY -->|Exponential Backoff| WH_QUEUE
+```
+
+### Incoming Webhook Flow (From Processors)
+
+```mermaid
+sequenceDiagram
+    participant Stripe as Stripe/PayPal
+    participant Receiver as Webhook Receiver
+    participant Verifier as Signature Verifier
+    participant Handler as Event Handler
+    participant DB as Database
+    participant EventBus as Event Bus
+    
+    Stripe->>Receiver: POST /webhooks/stripe
+    Note over Stripe,Receiver: Headers: Stripe-Signature
+    
+    Receiver->>Verifier: Verify signature
+    alt Invalid Signature
+        Verifier-->>Receiver: Signature invalid
+        Receiver-->>Stripe: 401 Unauthorized
+    else Valid Signature
+        Verifier-->>Receiver: Signature valid
+        Receiver->>Handler: Parse event
+        Handler->>DB: Update payment/refund status
+        Handler->>EventBus: Publish internal event
+        EventBus->>EventBus: Trigger outgoing webhooks
+        Handler-->>Receiver: Event processed
+        Receiver-->>Stripe: 200 OK
+    end
+```
+
+### Outgoing Webhook Flow (To Clients)
+
+```mermaid
+sequenceDiagram
+    participant Service as Payment Service
+    participant EventBus as Event Bus
+    participant Dispatcher as Webhook Dispatcher
+    participant Queue as Webhook Queue
+    participant Worker as Webhook Worker
+    participant Client as Client Application
+    participant Retry as Retry Scheduler
+    
+    Service->>EventBus: Publish event (payment.succeeded)
+    EventBus->>Dispatcher: Route event
+    Dispatcher->>Dispatcher: Find subscribed webhooks
+    Dispatcher->>Queue: Enqueue webhook delivery
+    
+    Queue->>Worker: Dequeue delivery task
+    Worker->>Worker: Sign payload (HMAC-SHA256)
+    Worker->>Client: POST webhook URL
+    Note over Worker,Client: Headers: X-Webhook-Signature, X-Event-Type
+    
+    alt Success (2xx response)
+        Client-->>Worker: 200 OK
+        Worker->>Queue: Mark delivered
+    else Failure (5xx or timeout)
+        Client-->>Worker: 500 Error
+        Worker->>Retry: Schedule retry
+        Note over Retry: Exponential backoff: 1m, 5m, 30m, 2h, 6h
+        Retry->>Queue: Re-enqueue after delay
+    else Permanent Failure (4xx)
+        Client-->>Worker: 400 Bad Request
+        Worker->>Queue: Mark failed (no retry)
+    end
+```
+
+### Webhook Event Types
+
+**Payment Events:**
+- `payment.created` - Payment initiated
+- `payment.processing` - Payment sent to processor
+- `payment.succeeded` - Payment completed successfully
+- `payment.failed` - Payment declined or error
+- `payment.canceled` - Payment voided
+- `payment.requires_action` - Customer action needed (3DS, etc.)
+
+**Refund Events:**
+- `refund.created` - Refund initiated
+- `refund.processing` - Refund sent to processor
+- `refund.succeeded` - Refund completed successfully
+- `refund.failed` - Refund error
+
+**Payment Method Events:**
+- `payment_method.attached` - Payment method added to customer
+- `payment_method.detached` - Payment method removed
+- `payment_method.updated` - Payment method details changed
+- `payment_method.expired` - Card expired
+
+### Webhook Payload Structure
+
+```json
+{
+  "id": "evt_1234567890",
+  "type": "payment.succeeded",
+  "created": 1678901234,
+  "data": {
+    "id": "pay_abc123",
+    "tenant_id": "tenant_xyz",
+    "amount": 5000,
+    "currency": "usd",
+    "status": "succeeded",
+    "payment_type": "recurring",
+    "customer_email": "customer@example.com",
+    "customer_name": "John Doe",
+    "processor_type": "stripe",
+    "processor_payment_id": "pi_stripe123",
+    "metadata": {
+      "invoice_id": "inv_456",
+      "subscription_id": "sub_789"
+    },
+    "processed_at": "2024-03-15T10:30:00Z",
+    "created_at": "2024-03-15T10:29:45Z"
+  }
+}
+```
+
+### Webhook Signature Verification
+
+Clients must verify webhook signatures to ensure authenticity:
+
+```java
+// Client-side verification example
+public boolean verifyWebhookSignature(String payload, String signature, String secret) {
+    try {
+        Mac hmac = Mac.getInstance("HmacSHA256");
+        SecretKeySpec secretKey = new SecretKeySpec(secret.getBytes(), "HmacSHA256");
+        hmac.init(secretKey);
+        
+        byte[] hash = hmac.doFinal(payload.getBytes());
+        String computed = "sha256=" + Hex.encodeHexString(hash);
+        
+        return MessageDigest.isEqual(
+            computed.getBytes(),
+            signature.getBytes()
+        );
+    } catch (Exception e) {
+        return false;
+    }
+}
+```
+
+### Webhook Retry Strategy
+
+**Retry Schedule:**
+- Attempt 1: Immediate
+- Attempt 2: 1 minute later
+- Attempt 3: 5 minutes later
+- Attempt 4: 30 minutes later
+- Attempt 5: 2 hours later
+- Attempt 6: 6 hours later
+- After 6 failures: Mark as permanently failed
+
+**Retry Conditions:**
+- Retry on: 5xx errors, network timeouts, connection errors
+- No retry on: 4xx errors (except 408, 429), invalid URLs
+- Max retries: 6 attempts over 24 hours
+
+**Implementation:**
+
+```java
+@Component
+public class WebhookRetryScheduler {
+    private static final int[] RETRY_DELAYS_MINUTES = {1, 5, 30, 120, 360};
+    private static final int MAX_RETRIES = 6;
+    
+    public Instant calculateNextRetry(int attemptNumber) {
+        if (attemptNumber >= MAX_RETRIES) {
+            return null;  // No more retries
+        }
+        
+        int delayMinutes = attemptNumber < RETRY_DELAYS_MINUTES.length
+            ? RETRY_DELAYS_MINUTES[attemptNumber - 1]
+            : RETRY_DELAYS_MINUTES[RETRY_DELAYS_MINUTES.length - 1];
+        
+        return Instant.now().plus(Duration.ofMinutes(delayMinutes));
+    }
+    
+    public boolean shouldRetry(int statusCode, int attemptNumber) {
+        if (attemptNumber >= MAX_RETRIES) {
+            return false;
+        }
+        
+        // Retry on server errors and specific client errors
+        return statusCode >= 500 || statusCode == 408 || statusCode == 429;
     }
 }
 ```

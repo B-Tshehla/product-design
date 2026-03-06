@@ -4,7 +4,7 @@
 
 The Billing Service is a standalone, multi-tenant billing platform that provides subscription management, invoice generation, and usage tracking capabilities to multiple client projects. Built with Spring Boot/Java and PostgreSQL, it focuses on subscription lifecycle management and delegates all payment processing to the separate Payment Service.
 
-The service operates independently of any specific client application, allowing multiple projects (such as the SaaS Talent Recruitment Platform) to leverage centralized billing infrastructure while maintaining strict data isolation between tenants.
+The service operates independently of any specific client application, allowing multiple projects to leverage centralized billing infrastructure while maintaining strict data isolation between tenants.
 
 ### Why Spring Boot/Java?
 
@@ -48,7 +48,6 @@ The Billing Service follows interface-based design principles for maximum testab
 **Dependency Injection Pattern:**
 - All service dependencies injected via **constructor injection** (preferred over field injection)
 - Constructor injection ensures immutability and makes dependencies explicit
-- Use `@Autowired` on constructor (optional for single constructor in Spring 4.3+)
 - Controllers depend on service interfaces from parent package, never import from `impl/`
 - Services depend on repository interfaces and other service interfaces
 - Integration layer (Payment Service client) uses interface for HTTP communication
@@ -123,8 +122,8 @@ public interface SubscriptionRepository extends JpaRepository<Subscription, UUID
 ```mermaid
 graph TB
     subgraph "Client Projects"
-        RP[Recruitment Platform]
-        CP1[Client Project 1]
+        RP[eTalente]
+        CP1[CV Analyser]
         CP2[Client Project 2]
     end
 
@@ -571,35 +570,45 @@ erDiagram
 ### Database Schema
 
 ```sql
--- Service Tenants (Client Projects)
+-- ============================================================================
+-- SERVICE_TENANTS TABLE
+-- Purpose: Stores client projects that use the Billing Service. Each tenant
+--          represents a separate client application (e.g., eTalente, CV Analyser)
+--          with complete data isolation and independent billing configuration.
+-- ============================================================================
 CREATE TABLE service_tenants (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    project_name VARCHAR(255) NOT NULL,
-    contact_email VARCHAR(255) NOT NULL,
-    payment_service_tenant_id VARCHAR(255),  -- Reference to Payment Service tenant
-    status VARCHAR(50) NOT NULL DEFAULT 'pending',
-    rate_limit_per_minute INTEGER DEFAULT 500,
-    settings JSONB DEFAULT '{}',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),                    -- Unique identifier for this tenant
+    project_name VARCHAR(255) NOT NULL,                               -- Display name of the client project
+    contact_email VARCHAR(255) NOT NULL,                              -- Primary contact email for billing notifications
+    payment_service_tenant_id VARCHAR(255),                           -- Foreign reference to Payment Service tenant ID for payment operations
+    status VARCHAR(50) NOT NULL DEFAULT 'pending',                    -- Tenant lifecycle status: pending (awaiting approval), active (operational), suspended (temporarily disabled), deleted (soft delete)
+    rate_limit_per_minute INTEGER DEFAULT 500,                        -- API rate limit to prevent abuse and ensure fair resource allocation
+    settings JSONB DEFAULT '{}',                                      -- Tenant-specific configuration (e.g., timezone, currency preferences, feature flags)
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),                -- Timestamp when tenant was registered
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),                -- Timestamp of last tenant configuration update
     CONSTRAINT valid_status CHECK (status IN ('pending', 'active', 'suspended', 'deleted'))
 );
 
 CREATE INDEX idx_service_tenants_status ON service_tenants(status);
 CREATE INDEX idx_service_tenants_payment_tenant ON service_tenants(payment_service_tenant_id);
 
--- API Keys for Client Authentication
+-- ============================================================================
+-- API_KEYS TABLE
+-- Purpose: Manages authentication credentials for client projects to access
+--          the Billing Service API. Supports key rotation, expiration, and
+--          revocation for security. Each tenant can have multiple API keys.
+-- ============================================================================
 CREATE TABLE api_keys (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    service_tenant_id UUID NOT NULL REFERENCES service_tenants(id) ON DELETE CASCADE,
-    key_hash VARCHAR(255) NOT NULL,
-    key_prefix VARCHAR(10) NOT NULL,
-    name VARCHAR(255),
-    status VARCHAR(50) NOT NULL DEFAULT 'active',
-    expires_at TIMESTAMP WITH TIME ZONE,
-    last_used_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    revoked_at TIMESTAMP WITH TIME ZONE,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),                    -- Unique identifier for this API key
+    service_tenant_id UUID NOT NULL REFERENCES service_tenants(id) ON DELETE CASCADE,  -- Owner tenant of this API key
+    key_hash VARCHAR(255) NOT NULL,                                   -- Bcrypt hash of the full API key for secure storage (never store plaintext)
+    key_prefix VARCHAR(10) NOT NULL,                                  -- First 8-10 characters of key for identification in logs without exposing full key
+    name VARCHAR(255),                                                -- Human-readable label for this key (e.g., "Production Key", "Development Key")
+    status VARCHAR(50) NOT NULL DEFAULT 'active',                     -- Key lifecycle status: active (usable), revoked (manually disabled), expired (past expiration date)
+    expires_at TIMESTAMP WITH TIME ZONE,                              -- Optional expiration timestamp for automatic key rotation policies
+    last_used_at TIMESTAMP WITH TIME ZONE,                            -- Timestamp of most recent successful authentication for security auditing
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),                -- Timestamp when key was generated
+    revoked_at TIMESTAMP WITH TIME ZONE,                              -- Timestamp when key was manually revoked (null if not revoked)
     CONSTRAINT valid_key_status CHECK (status IN ('active', 'revoked', 'expired'))
 );
 
@@ -607,52 +616,62 @@ CREATE INDEX idx_api_keys_tenant ON api_keys(service_tenant_id);
 CREATE INDEX idx_api_keys_prefix ON api_keys(key_prefix);
 CREATE INDEX idx_api_keys_status ON api_keys(status);
 
--- Subscription Plans per Client
+-- ============================================================================
+-- SUBSCRIPTION_PLANS TABLE
+-- Purpose: Defines subscription tiers and pricing models for each tenant.
+--          Each client project can create custom plans with different billing
+--          cycles, pricing, features, and trial periods for their end users.
+-- ============================================================================
 CREATE TABLE subscription_plans (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    service_tenant_id UUID NOT NULL REFERENCES service_tenants(id) ON DELETE CASCADE,
-    name VARCHAR(255) NOT NULL,
-    description TEXT,
-    billing_cycle VARCHAR(50) NOT NULL DEFAULT 'monthly',
-    price_cents INTEGER NOT NULL,
-    currency VARCHAR(3) DEFAULT 'USD',
-    features JSONB DEFAULT '{}',
-    limits JSONB DEFAULT '{}',
-    trial_days INTEGER DEFAULT 0,
-    status VARCHAR(50) NOT NULL DEFAULT 'active',
-    sort_order INTEGER DEFAULT 0,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),                    -- Unique identifier for this plan
+    service_tenant_id UUID NOT NULL REFERENCES service_tenants(id) ON DELETE CASCADE,  -- Owner tenant that created this plan
+    name VARCHAR(255) NOT NULL,                                       -- Plan name displayed to end users (e.g., "Basic", "Pro", "Enterprise")
+    description TEXT,                                                 -- Detailed description of plan features and benefits
+    billing_cycle VARCHAR(50) NOT NULL DEFAULT 'monthly',             -- Recurring billing frequency: monthly, yearly, quarterly
+    price_cents INTEGER NOT NULL,                                     -- Plan price in smallest currency unit (cents) to avoid floating-point errors
+    currency VARCHAR(3) DEFAULT 'USD',                                -- ISO 4217 currency code (USD, EUR, GBP, etc.)
+    features JSONB DEFAULT '{}',                                      -- Plan features as JSON (e.g., {"max_users": 10, "storage_gb": 100})
+    limits JSONB DEFAULT '{}',                                        -- Usage limits as JSON (e.g., {"api_calls_per_day": 1000})
+    trial_days INTEGER DEFAULT 0,                                     -- Number of days for free trial period (0 = no trial)
+    status VARCHAR(50) NOT NULL DEFAULT 'active',                     -- Plan availability: active (available for new subscriptions), archived (hidden but existing subscriptions continue), draft (not yet published)
+    sort_order INTEGER DEFAULT 0,                                     -- Display order for plan listing (lower numbers appear first)
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),                -- Timestamp when plan was created
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),                -- Timestamp of last plan modification
     CONSTRAINT valid_billing_cycle CHECK (billing_cycle IN ('monthly', 'yearly', 'quarterly')),
     CONSTRAINT valid_plan_status CHECK (status IN ('active', 'archived', 'draft')),
-    CONSTRAINT unique_plan_name UNIQUE (service_tenant_id, name)
+    CONSTRAINT unique_plan_name UNIQUE (service_tenant_id, name)      -- Plan names must be unique within each tenant
 );
 
 CREATE INDEX idx_plans_tenant ON subscription_plans(service_tenant_id);
 CREATE INDEX idx_plans_status ON subscription_plans(status);
 
--- Customer Subscriptions
+-- ============================================================================
+-- SUBSCRIPTIONS TABLE
+-- Purpose: Tracks active and historical subscriptions for end-user customers.
+--          Links customers to subscription plans and manages billing periods,
+--          trial periods, and subscription lifecycle (active, canceled, etc.).
+-- ============================================================================
 CREATE TABLE subscriptions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    service_tenant_id UUID NOT NULL REFERENCES service_tenants(id),
-    external_customer_id VARCHAR(255) NOT NULL,
-    external_customer_email VARCHAR(255),
-    plan_id UUID NOT NULL REFERENCES subscription_plans(id),
-    coupon_id UUID REFERENCES coupons(id),
-    payment_service_customer_id VARCHAR(255),  -- Reference to Payment Service customer
-    status VARCHAR(50) NOT NULL DEFAULT 'active',
-    current_period_start TIMESTAMP WITH TIME ZONE,
-    current_period_end TIMESTAMP WITH TIME ZONE,
-    cancel_at_period_end BOOLEAN DEFAULT FALSE,
-    canceled_at TIMESTAMP WITH TIME ZONE,
-    ended_at TIMESTAMP WITH TIME ZONE,
-    trial_start TIMESTAMP WITH TIME ZONE,
-    trial_end TIMESTAMP WITH TIME ZONE,
-    metadata JSONB DEFAULT '{}',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),                    -- Unique identifier for this subscription
+    service_tenant_id UUID NOT NULL REFERENCES service_tenants(id),   -- Tenant that owns this subscription (for multi-tenant isolation)
+    external_customer_id VARCHAR(255) NOT NULL,                       -- Customer identifier from the client project's system
+    external_customer_email VARCHAR(255),                             -- Customer email for invoice delivery and notifications
+    plan_id UUID NOT NULL REFERENCES subscription_plans(id),          -- The subscription plan this customer is subscribed to
+    coupon_id UUID REFERENCES coupons(id),                            -- Optional coupon applied to this subscription for discounts
+    payment_service_customer_id VARCHAR(255),                         -- Foreign reference to Payment Service customer ID for payment processing
+    status VARCHAR(50) NOT NULL DEFAULT 'active',                     -- Subscription lifecycle status: trialing (in trial period), active (paid and current), past_due (payment failed), canceled (will end at period end), unpaid (multiple payment failures), incomplete (awaiting first payment), incomplete_expired (first payment never completed)
+    current_period_start TIMESTAMP WITH TIME ZONE,                    -- Start of current billing period for prorated calculations
+    current_period_end TIMESTAMP WITH TIME ZONE,                      -- End of current billing period (triggers invoice generation)
+    cancel_at_period_end BOOLEAN DEFAULT FALSE,                       -- If true, subscription will not renew after current period ends
+    canceled_at TIMESTAMP WITH TIME ZONE,                             -- Timestamp when cancellation was requested
+    ended_at TIMESTAMP WITH TIME ZONE,                                -- Timestamp when subscription actually ended (after final period)
+    trial_start TIMESTAMP WITH TIME ZONE,                             -- Start of trial period (null if no trial)
+    trial_end TIMESTAMP WITH TIME ZONE,                               -- End of trial period (null if no trial)
+    metadata JSONB DEFAULT '{}',                                      -- Additional custom data from client project (e.g., user preferences, feature flags)
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),                -- Timestamp when subscription was created
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),                -- Timestamp of last subscription modification
     CONSTRAINT valid_sub_status CHECK (status IN ('trialing', 'active', 'past_due', 'canceled', 'unpaid', 'incomplete', 'incomplete_expired')),
-    CONSTRAINT unique_customer_subscription UNIQUE (service_tenant_id, external_customer_id)
+    CONSTRAINT unique_customer_subscription UNIQUE (service_tenant_id, external_customer_id)  -- One active subscription per customer per tenant
 );
 
 CREATE INDEX idx_subscriptions_tenant ON subscriptions(service_tenant_id);
@@ -661,26 +680,31 @@ CREATE INDEX idx_subscriptions_payment_customer ON subscriptions(payment_service
 CREATE INDEX idx_subscriptions_status ON subscriptions(status);
 CREATE INDEX idx_subscriptions_period_end ON subscriptions(current_period_end);
 
--- Invoices
+-- ============================================================================
+-- INVOICES TABLE
+-- Purpose: Stores billing invoices generated for subscription periods. Each
+--          invoice represents an amount owed by a customer for a billing cycle.
+--          Tracks payment status and links to Payment Service for processing.
+-- ============================================================================
 CREATE TABLE invoices (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    service_tenant_id UUID NOT NULL REFERENCES service_tenants(id),
-    subscription_id UUID NOT NULL REFERENCES subscriptions(id),
-    invoice_number VARCHAR(100),
-    amount_cents INTEGER NOT NULL,
-    amount_due_cents INTEGER NOT NULL,
-    amount_paid_cents INTEGER DEFAULT 0,
-    currency VARCHAR(3) DEFAULT 'USD',
-    status VARCHAR(50) NOT NULL,
-    payment_service_payment_id VARCHAR(255),  -- Reference to Payment Service payment
-    invoice_pdf_url TEXT,
-    hosted_invoice_url TEXT,
-    period_start TIMESTAMP WITH TIME ZONE,
-    period_end TIMESTAMP WITH TIME ZONE,
-    due_date TIMESTAMP WITH TIME ZONE,
-    paid_at TIMESTAMP WITH TIME ZONE,
-    voided_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),                    -- Unique identifier for this invoice
+    service_tenant_id UUID NOT NULL REFERENCES service_tenants(id),   -- Tenant that owns this invoice (for multi-tenant isolation)
+    subscription_id UUID NOT NULL REFERENCES subscriptions(id),       -- The subscription this invoice was generated for
+    invoice_number VARCHAR(100),                                      -- Human-readable invoice number (e.g., "INV-2024-001") for customer reference
+    amount_cents INTEGER NOT NULL,                                    -- Total invoice amount in cents before any payments
+    amount_due_cents INTEGER NOT NULL,                                -- Remaining amount owed in cents (amount_cents - amount_paid_cents)
+    amount_paid_cents INTEGER DEFAULT 0,                              -- Amount already paid in cents (updated when payments succeed)
+    currency VARCHAR(3) DEFAULT 'USD',                                -- ISO 4217 currency code for this invoice
+    status VARCHAR(50) NOT NULL,                                      -- Invoice payment status: draft (not finalized), open (awaiting payment), paid (fully paid), void (canceled/invalid), uncollectible (payment attempts exhausted)
+    payment_service_payment_id VARCHAR(255),                          -- Foreign reference to Payment Service payment ID when payment is processed
+    invoice_pdf_url TEXT,                                             -- URL to downloadable PDF version of invoice for customer records
+    hosted_invoice_url TEXT,                                          -- URL to hosted payment page where customer can pay invoice
+    period_start TIMESTAMP WITH TIME ZONE,                            -- Start of billing period this invoice covers
+    period_end TIMESTAMP WITH TIME ZONE,                              -- End of billing period this invoice covers
+    due_date TIMESTAMP WITH TIME ZONE,                                -- Payment deadline (typically period_end + grace period)
+    paid_at TIMESTAMP WITH TIME ZONE,                                 -- Timestamp when invoice was fully paid (null if unpaid)
+    voided_at TIMESTAMP WITH TIME ZONE,                               -- Timestamp when invoice was voided/canceled (null if not voided)
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),                -- Timestamp when invoice was generated
     CONSTRAINT valid_invoice_status CHECK (status IN ('draft', 'open', 'paid', 'void', 'uncollectible'))
 );
 
@@ -690,67 +714,82 @@ CREATE INDEX idx_invoices_payment_id ON invoices(payment_service_payment_id);
 CREATE INDEX idx_invoices_status ON invoices(status);
 CREATE INDEX idx_invoices_due_date ON invoices(due_date);
 
--- Coupons
+-- ============================================================================
+-- COUPONS TABLE
+-- Purpose: Manages discount codes that customers can apply to subscriptions.
+--          Supports percentage and fixed-amount discounts with redemption limits,
+--          expiration dates, and plan restrictions for promotional campaigns.
+-- ============================================================================
 CREATE TABLE coupons (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    service_tenant_id UUID NOT NULL REFERENCES service_tenants(id) ON DELETE CASCADE,
-    code VARCHAR(50) NOT NULL,
-    name VARCHAR(255),
-    discount_type VARCHAR(50) NOT NULL,
-    discount_value INTEGER NOT NULL,
-    currency VARCHAR(3) DEFAULT 'USD',
-    duration VARCHAR(50) NOT NULL DEFAULT 'once',
-    duration_months INTEGER,
-    max_redemptions INTEGER,
-    redemption_count INTEGER DEFAULT 0,
-    applies_to_plans UUID[],
-    valid_from TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    valid_until TIMESTAMP WITH TIME ZONE,
-    status VARCHAR(50) NOT NULL DEFAULT 'active',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),                    -- Unique identifier for this coupon
+    service_tenant_id UUID NOT NULL REFERENCES service_tenants(id) ON DELETE CASCADE,  -- Tenant that created this coupon
+    code VARCHAR(50) NOT NULL,                                        -- Coupon code entered by customers (e.g., "SUMMER2024", "WELCOME50")
+    name VARCHAR(255),                                                -- Internal name for coupon management (e.g., "Summer Promotion 2024")
+    discount_type VARCHAR(50) NOT NULL,                               -- Type of discount: percent (percentage off) or fixed (fixed amount off)
+    discount_value INTEGER NOT NULL,                                  -- Discount amount: percentage (e.g., 20 for 20% off) or cents (e.g., 1000 for $10 off)
+    currency VARCHAR(3) DEFAULT 'USD',                                -- Currency for fixed-amount discounts (ignored for percentage discounts)
+    duration VARCHAR(50) NOT NULL DEFAULT 'once',                     -- How long discount applies: once (first invoice only), repeating (for duration_months), forever (all invoices)
+    duration_months INTEGER,                                          -- Number of months discount applies (required if duration='repeating')
+    max_redemptions INTEGER,                                          -- Maximum number of times this coupon can be used across all customers (null = unlimited)
+    redemption_count INTEGER DEFAULT 0,                               -- Current number of times this coupon has been redeemed
+    applies_to_plans UUID[],                                          -- Array of plan IDs this coupon is valid for (null/empty = all plans)
+    valid_from TIMESTAMP WITH TIME ZONE DEFAULT NOW(),                -- Coupon becomes active at this timestamp
+    valid_until TIMESTAMP WITH TIME ZONE,                             -- Coupon expires at this timestamp (null = no expiration)
+    status VARCHAR(50) NOT NULL DEFAULT 'active',                     -- Coupon availability: active (can be redeemed), expired (past valid_until), archived (manually disabled)
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),                -- Timestamp when coupon was created
     CONSTRAINT valid_discount_type CHECK (discount_type IN ('percent', 'fixed')),
     CONSTRAINT valid_duration CHECK (duration IN ('once', 'repeating', 'forever')),
     CONSTRAINT valid_coupon_status CHECK (status IN ('active', 'expired', 'archived')),
-    CONSTRAINT unique_coupon_code UNIQUE (service_tenant_id, code)
+    CONSTRAINT unique_coupon_code UNIQUE (service_tenant_id, code)    -- Coupon codes must be unique within each tenant
 );
 
 CREATE INDEX idx_coupons_tenant ON coupons(service_tenant_id);
 CREATE INDEX idx_coupons_code ON coupons(code);
 CREATE INDEX idx_coupons_status ON coupons(status);
 
--- Webhook Configurations
+-- ============================================================================
+-- WEBHOOK_CONFIGS TABLE
+-- Purpose: Stores webhook endpoint configurations for each tenant to receive
+--          real-time notifications about billing events (invoice.paid,
+--          subscription.canceled, etc.). Includes retry logic and health tracking.
+-- ============================================================================
 CREATE TABLE webhook_configs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    service_tenant_id UUID NOT NULL REFERENCES service_tenants(id) ON DELETE CASCADE,
-    url VARCHAR(500) NOT NULL,
-    events JSONB NOT NULL DEFAULT '[]',
-    secret_hash VARCHAR(255) NOT NULL,
-    status VARCHAR(50) NOT NULL DEFAULT 'active',
-    failure_count INTEGER DEFAULT 0,
-    last_success_at TIMESTAMP WITH TIME ZONE,
-    last_failure_at TIMESTAMP WITH TIME ZONE,
-    last_failure_reason TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),                    -- Unique identifier for this webhook configuration
+    service_tenant_id UUID NOT NULL REFERENCES service_tenants(id) ON DELETE CASCADE,  -- Tenant that owns this webhook endpoint
+    url VARCHAR(500) NOT NULL,                                        -- HTTPS endpoint URL where webhook events will be delivered
+    events JSONB NOT NULL DEFAULT '[]',                               -- Array of event types to subscribe to (e.g., ["invoice.paid", "subscription.canceled"])
+    secret_hash VARCHAR(255) NOT NULL,                                -- Hashed secret for HMAC signature verification (tenant uses this to verify webhook authenticity)
+    status VARCHAR(50) NOT NULL DEFAULT 'active',                     -- Webhook health status: active (operational), disabled (manually turned off), failing (consecutive failures exceeded threshold)
+    failure_count INTEGER DEFAULT 0,                                  -- Consecutive delivery failures (resets to 0 on successful delivery)
+    last_success_at TIMESTAMP WITH TIME ZONE,                         -- Timestamp of most recent successful webhook delivery
+    last_failure_at TIMESTAMP WITH TIME ZONE,                         -- Timestamp of most recent failed webhook delivery
+    last_failure_reason TEXT,                                         -- Error message from most recent failure for debugging
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),                -- Timestamp when webhook was configured
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),                -- Timestamp of last configuration update
     CONSTRAINT valid_webhook_status CHECK (status IN ('active', 'disabled', 'failing'))
 );
 
 CREATE INDEX idx_webhooks_tenant ON webhook_configs(service_tenant_id);
 CREATE INDEX idx_webhooks_status ON webhook_configs(status);
 
--- Webhook Delivery Log
+-- ============================================================================
+-- WEBHOOK_DELIVERIES TABLE
+-- Purpose: Logs all webhook delivery attempts with retry tracking. Enables
+--          debugging of webhook failures and implements exponential backoff
+--          retry strategy for transient failures.
+-- ============================================================================
 CREATE TABLE webhook_deliveries (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    webhook_config_id UUID NOT NULL REFERENCES webhook_configs(id) ON DELETE CASCADE,
-    event_type VARCHAR(100) NOT NULL,
-    payload JSONB NOT NULL,
-    response_status INTEGER,
-    response_body TEXT,
-    attempt_count INTEGER DEFAULT 1,
-    status VARCHAR(50) NOT NULL DEFAULT 'pending',
-    next_retry_at TIMESTAMP WITH TIME ZONE,
-    delivered_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),                    -- Unique identifier for this delivery attempt
+    webhook_config_id UUID NOT NULL REFERENCES webhook_configs(id) ON DELETE CASCADE,  -- The webhook configuration this delivery is for
+    event_type VARCHAR(100) NOT NULL,                                 -- Type of event being delivered (e.g., "invoice.paid", "subscription.canceled")
+    payload JSONB NOT NULL,                                           -- Full event payload sent to webhook endpoint
+    response_status INTEGER,                                          -- HTTP status code from webhook endpoint (e.g., 200, 500, null if network error)
+    response_body TEXT,                                               -- Response body from webhook endpoint for debugging
+    attempt_count INTEGER DEFAULT 1,                                  -- Number of delivery attempts for this event (increments on retries)
+    status VARCHAR(50) NOT NULL DEFAULT 'pending',                    -- Delivery status: pending (not yet attempted), delivered (successful), failed (all retries exhausted), retrying (scheduled for retry)
+    next_retry_at TIMESTAMP WITH TIME ZONE,                           -- Timestamp for next retry attempt (null if delivered or failed permanently)
+    delivered_at TIMESTAMP WITH TIME ZONE,                            -- Timestamp when webhook was successfully delivered (null if not delivered)
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),                -- Timestamp when delivery was first queued
     CONSTRAINT valid_delivery_status CHECK (status IN ('pending', 'delivered', 'failed', 'retrying'))
 );
 
@@ -758,41 +797,51 @@ CREATE INDEX idx_webhook_deliveries_config ON webhook_deliveries(webhook_config_
 CREATE INDEX idx_webhook_deliveries_status ON webhook_deliveries(status);
 CREATE INDEX idx_webhook_deliveries_retry ON webhook_deliveries(next_retry_at) WHERE status = 'retrying';
 
--- Usage Tracking
+-- ============================================================================
+-- BILLING_USAGE TABLE
+-- Purpose: Aggregates usage metrics for each tenant over time periods for
+--          analytics, capacity planning, and potential usage-based billing.
+--          Tracks subscription activity, payment volume, and API usage.
+-- ============================================================================
 CREATE TABLE billing_usage (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    service_tenant_id UUID NOT NULL REFERENCES service_tenants(id),
-    period_start DATE NOT NULL,
-    period_end DATE NOT NULL,
-    subscriptions_created INTEGER DEFAULT 0,
-    subscriptions_canceled INTEGER DEFAULT 0,
-    payments_processed INTEGER DEFAULT 0,
-    payments_failed INTEGER DEFAULT 0,
-    total_payment_volume_cents BIGINT DEFAULT 0,
-    invoices_generated INTEGER DEFAULT 0,
-    webhook_calls INTEGER DEFAULT 0,
-    api_calls INTEGER DEFAULT 0,
-    CONSTRAINT unique_usage_period UNIQUE (service_tenant_id, period_start)
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),                    -- Unique identifier for this usage record
+    service_tenant_id UUID NOT NULL REFERENCES service_tenants(id),   -- Tenant this usage data belongs to
+    period_start DATE NOT NULL,                                       -- Start date of measurement period (typically first day of month)
+    period_end DATE NOT NULL,                                         -- End date of measurement period (typically last day of month)
+    subscriptions_created INTEGER DEFAULT 0,                          -- Number of new subscriptions created in this period
+    subscriptions_canceled INTEGER DEFAULT 0,                         -- Number of subscriptions canceled in this period
+    payments_processed INTEGER DEFAULT 0,                             -- Number of successful payment transactions processed
+    payments_failed INTEGER DEFAULT 0,                                -- Number of failed payment attempts for monitoring payment health
+    total_payment_volume_cents BIGINT DEFAULT 0,                      -- Total monetary value processed in cents for revenue tracking
+    invoices_generated INTEGER DEFAULT 0,                             -- Number of invoices generated in this period
+    webhook_calls INTEGER DEFAULT 0,                                  -- Number of webhook deliveries attempted for monitoring webhook activity
+    api_calls INTEGER DEFAULT 0,                                      -- Number of API requests made by this tenant for rate limiting insights
+    CONSTRAINT unique_usage_period UNIQUE (service_tenant_id, period_start)  -- One usage record per tenant per period
 );
 
 CREATE INDEX idx_usage_tenant ON billing_usage(service_tenant_id);
 CREATE INDEX idx_usage_period ON billing_usage(period_start, period_end);
 
--- Audit Log
+-- ============================================================================
+-- AUDIT_LOGS TABLE
+-- Purpose: Comprehensive audit trail of all actions performed in the system
+--          for security compliance, debugging, and forensic analysis. Captures
+--          who did what, when, and what changed for regulatory requirements.
+-- ============================================================================
 CREATE TABLE audit_logs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    service_tenant_id UUID REFERENCES service_tenants(id),
-    actor_type VARCHAR(50) NOT NULL,
-    actor_id VARCHAR(255),
-    action VARCHAR(100) NOT NULL,
-    resource_type VARCHAR(100) NOT NULL,
-    resource_id UUID,
-    before_state JSONB,
-    after_state JSONB,
-    ip_address INET,
-    user_agent TEXT,
-    correlation_id VARCHAR(255),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),                    -- Unique identifier for this audit log entry
+    service_tenant_id UUID REFERENCES service_tenants(id),            -- Tenant context for this action (null for system-level actions)
+    actor_type VARCHAR(50) NOT NULL,                                  -- Type of actor: user (end user), system (automated process), api_key (API client)
+    actor_id VARCHAR(255),                                            -- Identifier of the actor (user ID, system process name, API key prefix)
+    action VARCHAR(100) NOT NULL,                                     -- Action performed (e.g., "subscription.created", "invoice.voided", "plan.updated")
+    resource_type VARCHAR(100) NOT NULL,                              -- Type of resource affected (e.g., "subscription", "invoice", "plan")
+    resource_id UUID,                                                 -- ID of the specific resource that was modified
+    before_state JSONB,                                               -- Snapshot of resource state before the action (for rollback and change tracking)
+    after_state JSONB,                                                -- Snapshot of resource state after the action (for change tracking)
+    ip_address INET,                                                  -- IP address of the request origin for security analysis
+    user_agent TEXT,                                                  -- User agent string for client identification
+    correlation_id VARCHAR(255),                                      -- Request correlation ID for tracing actions across distributed systems
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()                 -- Timestamp when action occurred
 );
 
 CREATE INDEX idx_audit_tenant ON audit_logs(service_tenant_id);
@@ -800,16 +849,21 @@ CREATE INDEX idx_audit_action ON audit_logs(action);
 CREATE INDEX idx_audit_resource ON audit_logs(resource_type, resource_id);
 CREATE INDEX idx_audit_created ON audit_logs(created_at);
 
--- Idempotency Keys
+-- ============================================================================
+-- IDEMPOTENCY_KEYS TABLE
+-- Purpose: Prevents duplicate operations from repeated API requests. Stores
+--          request fingerprints and cached responses to ensure exactly-once
+--          semantics for critical operations like subscription creation.
+-- ============================================================================
 CREATE TABLE idempotency_keys (
-    key VARCHAR(255) PRIMARY KEY,
-    service_tenant_id UUID NOT NULL REFERENCES service_tenants(id),
-    request_path VARCHAR(255) NOT NULL,
-    request_hash VARCHAR(64) NOT NULL,
-    response_status INTEGER,
-    response_body JSONB,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    expires_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() + INTERVAL '24 hours'
+    key VARCHAR(255) PRIMARY KEY,                                     -- Client-provided idempotency key (unique identifier for this operation)
+    service_tenant_id UUID NOT NULL REFERENCES service_tenants(id),   -- Tenant that made this request (for multi-tenant isolation)
+    request_path VARCHAR(255) NOT NULL,                               -- API endpoint path (e.g., "/api/v1/subscriptions") for request matching
+    request_hash VARCHAR(64) NOT NULL,                                -- SHA-256 hash of request body to detect parameter changes with same idempotency key
+    response_status INTEGER,                                          -- HTTP status code of cached response (e.g., 200, 201, 400)
+    response_body JSONB,                                              -- Cached response body to return for duplicate requests
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),                -- Timestamp when this idempotency key was first used
+    expires_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() + INTERVAL '24 hours'  -- Expiration timestamp (keys auto-expire after 24 hours)
 );
 
 CREATE INDEX idx_idempotency_expires ON idempotency_keys(expires_at);
