@@ -1,0 +1,1911 @@
+openapi: 3.0.3
+info:
+  title: Billing Service API
+  description: |
+    Subscription billing and management API for the Enviro Payment Gateway Platform.
+    
+    The Billing Service manages subscription plans, subscriptions, coupons, invoicing,
+    and usage analytics. It delegates payment execution to the Payment Service.
+    
+    ## Authentication
+    All tenant-scoped endpoints require an `X-API-Key` header containing your API key.
+    The tenant is resolved from the API key automatically.
+    
+    ## Idempotency
+    Subscription creation and other POST endpoints accept an `Idempotency-Key` header.
+    Duplicate requests with the same key and parameters return the cached response.
+    Keys expire after 24 hours.
+    
+    ## Multi-Tenancy
+    All data is isolated per tenant via PostgreSQL Row-Level Security.
+    
+    ## Currency
+    Default currency is ZAR. Monetary amounts are in smallest currency unit (cents).
+  version: 1.0.0
+  contact:
+    name: Enviro Platform Team
+
+servers:
+  - url: http://localhost:8081/api/v1
+    description: Local development
+  - url: https://billing-dev.enviro.co.za/api/v1
+    description: Development
+  - url: https://billing-staging.enviro.co.za/api/v1
+    description: Staging
+  - url: https://billing.enviro.co.za/api/v1
+    description: Production
+
+tags:
+  - name: Clients
+    description: Client project registration and API key management
+  - name: Plans
+    description: Subscription plan management
+  - name: Subscriptions
+    description: Subscription lifecycle management
+  - name: Invoices
+    description: Invoice management
+  - name: Coupons
+    description: Coupon and discount management
+  - name: Usage
+    description: Billing usage analytics
+  - name: Webhooks
+    description: Outgoing webhook configuration
+  - name: Health
+    description: Health check endpoints
+
+paths:
+  # ──────────────────────────── CLIENTS ───────────────────────────
+  /clients/register:
+    post:
+      tags: [Clients]
+      summary: Register a new client project
+      description: |
+        Register a new client project as a tenant. Returns the API key (shown only once).
+        Admin authentication required.
+      operationId: registerClient
+      security:
+        - AdminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterClientRequest'
+      responses:
+        '201':
+          description: Client registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientRegistrationResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+
+  /clients/{clientId}/api-keys/rotate:
+    post:
+      tags: [Clients]
+      summary: Rotate API key
+      description: |
+        Generate a new API key. The old key remains valid for 24 hours (grace period).
+        Returns the new key plaintext (shown only once).
+      operationId: rotateApiKey
+      security:
+        - AdminAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ClientId'
+      responses:
+        '200':
+          description: New API key generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyRotationResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /clients/{clientId}/api-keys/{keyId}:
+    delete:
+      tags: [Clients]
+      summary: Revoke an API key
+      description: Immediately invalidate a specific API key. Cannot be undone.
+      operationId: revokeApiKey
+      security:
+        - AdminAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ClientId'
+        - name: keyId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: API key revoked
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /clients/{clientId}/api-keys:
+    get:
+      tags: [Clients]
+      summary: List API keys for a client
+      description: Returns a list of API key summaries (prefix, status, usage info). Secret parts are never returned.
+      operationId: listApiKeys
+      security:
+        - AdminAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ClientId'
+      responses:
+        '200':
+          description: List of API key summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ApiKeySummaryResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ───────────────────────────── PLANS ────────────────────────────
+  /plans:
+    post:
+      tags: [Plans]
+      summary: Create a subscription plan
+      description: |
+        Create a new subscription plan. Price and billing cycle are immutable after creation.
+        To change pricing, archive the old plan and create a new one.
+      operationId: createPlan
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePlanRequest'
+      responses:
+        '201':
+          description: Plan created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Plan with this name already exists for this tenant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      tags: [Plans]
+      summary: List subscription plans
+      operationId: listPlans
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [draft, active, archived]
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Paginated list of plans
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedPlanResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /plans/{planId}:
+    get:
+      tags: [Plans]
+      summary: Get plan details
+      operationId: getPlan
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - $ref: '#/components/parameters/PlanId'
+      responses:
+        '200':
+          description: Plan details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [Plans]
+      summary: Update plan
+      description: |
+        Update plan metadata. Price and billing cycle cannot be changed.
+        Updatable fields: name, description, features, limits, status, sortOrder.
+      operationId: updatePlan
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - $ref: '#/components/parameters/PlanId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePlanRequest'
+      responses:
+        '200':
+          description: Plan updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Plans]
+      summary: Archive plan
+      description: |
+        Soft-delete by setting status to `archived`. Existing subscriptions on this plan continue.
+        The plan is hidden from new subscription creation.
+      operationId: archivePlan
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - $ref: '#/components/parameters/PlanId'
+      responses:
+        '200':
+          description: Plan archived
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ────────────────────── SUBSCRIPTIONS ───────────────────────────
+  /subscriptions:
+    post:
+      tags: [Subscriptions]
+      summary: Create a subscription
+      description: |
+        Create a new subscription for a customer. If the plan has a trial period,
+        the subscription starts in `trialing` status. Otherwise, it starts as `incomplete`
+        until a payment method is attached via the returned `paymentSetupUrl`.
+        
+        One active subscription per customer per tenant.
+      operationId: createSubscription
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSubscriptionRequest'
+      responses:
+        '201':
+          description: Subscription created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Customer already has an active subscription
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      tags: [Subscriptions]
+      summary: List subscriptions
+      operationId: listSubscriptions
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/SubscriptionStatus'
+        - name: planId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: customerId
+          in: query
+          schema:
+            type: string
+        - name: fromDate
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: toDate
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: Paginated list of subscriptions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedSubscriptionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /subscriptions/{subscriptionId}:
+    get:
+      tags: [Subscriptions]
+      summary: Get subscription details
+      operationId: getSubscription
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - $ref: '#/components/parameters/SubscriptionId'
+      responses:
+        '200':
+          description: Subscription details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [Subscriptions]
+      summary: Update subscription
+      description: Update subscription metadata or cancelAtPeriodEnd flag.
+      operationId: updateSubscription
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - $ref: '#/components/parameters/SubscriptionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSubscriptionRequest'
+      responses:
+        '200':
+          description: Subscription updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /subscriptions/customer/{externalCustomerId}:
+    get:
+      tags: [Subscriptions]
+      summary: Get subscription by customer ID
+      operationId: getSubscriptionByCustomer
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - name: externalCustomerId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Subscription details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /subscriptions/{subscriptionId}/cancel:
+    post:
+      tags: [Subscriptions]
+      summary: Cancel subscription
+      operationId: cancelSubscription
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - $ref: '#/components/parameters/SubscriptionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelSubscriptionRequest'
+      responses:
+        '200':
+          description: Subscription canceled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/InvalidState'
+
+  /subscriptions/{subscriptionId}/reactivate:
+    post:
+      tags: [Subscriptions]
+      summary: Reactivate subscription
+      description: Reactivate a canceled subscription before the current period ends.
+      operationId: reactivateSubscription
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - $ref: '#/components/parameters/SubscriptionId'
+      responses:
+        '200':
+          description: Subscription reactivated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/InvalidState'
+
+  /subscriptions/{subscriptionId}/change-plan:
+    post:
+      tags: [Subscriptions]
+      summary: Change subscription plan
+      description: |
+        Upgrade or downgrade to a different plan. If `prorate` is true (default),
+        a prorated charge/credit is calculated for the remaining period.
+      operationId: changePlan
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - $ref: '#/components/parameters/SubscriptionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePlanRequest'
+      responses:
+        '200':
+          description: Plan changed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/InvalidState'
+
+  /subscriptions/{subscriptionId}/pause:
+    post:
+      tags: [Subscriptions]
+      summary: Pause subscription
+      description: Pause billing. The subscription stays active but no charges are made.
+      operationId: pauseSubscription
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - $ref: '#/components/parameters/SubscriptionId'
+      responses:
+        '200':
+          description: Subscription paused
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/InvalidState'
+
+  /subscriptions/{subscriptionId}/resume:
+    post:
+      tags: [Subscriptions]
+      summary: Resume subscription
+      description: Resume billing from a paused state.
+      operationId: resumeSubscription
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - $ref: '#/components/parameters/SubscriptionId'
+      responses:
+        '200':
+          description: Subscription resumed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/InvalidState'
+
+  /subscriptions/{subscriptionId}/apply-coupon:
+    post:
+      tags: [Subscriptions]
+      summary: Apply coupon to subscription
+      operationId: applyCoupon
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - $ref: '#/components/parameters/SubscriptionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplyCouponRequest'
+      responses:
+        '200':
+          description: Coupon applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          description: Coupon is invalid, expired, or not applicable to the subscription plan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ──────────────────────────── INVOICES ──────────────────────────
+  /invoices:
+    get:
+      tags: [Invoices]
+      summary: List invoices
+      operationId: listInvoices
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - name: subscriptionId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/InvoiceStatus'
+        - name: fromDueDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: toDueDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Paginated list of invoices
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedInvoiceResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /invoices/{invoiceId}:
+    get:
+      tags: [Invoices]
+      summary: Get invoice details
+      operationId: getInvoice
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - $ref: '#/components/parameters/InvoiceId'
+      responses:
+        '200':
+          description: Invoice details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvoiceResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /subscriptions/{subscriptionId}/invoices:
+    get:
+      tags: [Invoices]
+      summary: List invoices for a subscription
+      operationId: listInvoicesForSubscription
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - $ref: '#/components/parameters/SubscriptionId'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Paginated list of invoices for the subscription
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedInvoiceResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /subscriptions/{subscriptionId}/upcoming-invoice:
+    get:
+      tags: [Invoices]
+      summary: Preview upcoming invoice
+      description: Returns a preview of the next invoice with line items and coupon discount.
+      operationId: getUpcomingInvoice
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - $ref: '#/components/parameters/SubscriptionId'
+      responses:
+        '200':
+          description: Upcoming invoice preview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpcomingInvoiceResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /invoices/{invoiceId}/void:
+    post:
+      tags: [Invoices]
+      summary: Void an invoice
+      description: Mark an invoice as void. It can no longer be paid.
+      operationId: voidInvoice
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - $ref: '#/components/parameters/InvoiceId'
+      responses:
+        '200':
+          description: Invoice voided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvoiceResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/InvalidState'
+
+  /invoices/{invoiceId}/mark-uncollectible:
+    post:
+      tags: [Invoices]
+      summary: Mark invoice as uncollectible
+      description: Mark an invoice as uncollectible after all payment attempts have been exhausted.
+      operationId: markUncollectible
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - $ref: '#/components/parameters/InvoiceId'
+      responses:
+        '200':
+          description: Invoice marked uncollectible
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvoiceResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/InvalidState'
+
+  # ──────────────────────────── COUPONS ───────────────────────────
+  /coupons:
+    post:
+      tags: [Coupons]
+      summary: Create a coupon
+      operationId: createCoupon
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCouponRequest'
+      responses:
+        '201':
+          description: Coupon created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CouponResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Coupon with this code already exists for this tenant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      tags: [Coupons]
+      summary: List coupons
+      operationId: listCoupons
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, expired, archived]
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Paginated list of coupons
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedCouponResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /coupons/{couponId}:
+    get:
+      tags: [Coupons]
+      summary: Get coupon details
+      operationId: getCoupon
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - name: couponId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Coupon details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CouponResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Coupons]
+      summary: Archive coupon
+      description: Soft-delete. Existing subscriptions with this coupon continue to receive the discount.
+      operationId: archiveCoupon
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - name: couponId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Coupon archived
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CouponResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /coupons/validate:
+    post:
+      tags: [Coupons]
+      summary: Validate a coupon code
+      description: Check if a coupon code is valid and applicable to an optional plan.
+      operationId: validateCoupon
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidateCouponRequest'
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CouponValidationResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ───────────────────────────── USAGE ────────────────────────────
+  /usage:
+    get:
+      tags: [Usage]
+      summary: Get current period usage
+      operationId: getCurrentUsage
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+      responses:
+        '200':
+          description: Current period usage
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingUsageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /usage/report:
+    get:
+      tags: [Usage]
+      summary: Generate usage report
+      operationId: getUsageReport
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - name: startDate
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: granularity
+          in: query
+          schema:
+            type: string
+            enum: [daily, weekly, monthly]
+            default: daily
+      responses:
+        '200':
+          description: Usage report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageReportResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ──────────────────────────── WEBHOOKS ──────────────────────────
+  /webhook-configs:
+    post:
+      tags: [Webhooks]
+      summary: Create webhook configuration
+      operationId: createWebhookConfig
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWebhookConfigRequest'
+      responses:
+        '201':
+          description: Webhook config created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookConfigResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    get:
+      tags: [Webhooks]
+      summary: List webhook configurations
+      operationId: listWebhookConfigs
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+      responses:
+        '200':
+          description: List of webhook configs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WebhookConfigResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /webhook-configs/{configId}:
+    put:
+      tags: [Webhooks]
+      summary: Update webhook configuration
+      operationId: updateWebhookConfig
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - name: configId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateWebhookConfigRequest'
+      responses:
+        '200':
+          description: Webhook config updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookConfigResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Webhooks]
+      summary: Delete webhook configuration
+      operationId: deleteWebhookConfig
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - name: configId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Webhook config deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /webhook-configs/{configId}/test:
+    post:
+      tags: [Webhooks]
+      summary: Send test webhook
+      description: Dispatch a test webhook event to this endpoint to verify connectivity.
+      operationId: testWebhookConfig
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - name: configId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Test webhook sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  responseStatus:
+                    type: integer
+                  responseTime:
+                    type: integer
+                    description: Response time in milliseconds
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ────────── PAYMENT SERVICE INBOUND WEBHOOK (INTERNAL) ─────────
+  /webhooks/payment-service:
+    post:
+      tags: [Webhooks]
+      summary: Payment Service webhook receiver
+      description: |
+        Internal endpoint that receives webhook events from the Payment Service.
+        Signature-verified via HMAC-SHA256 using the shared webhook secret.
+      operationId: receivePaymentServiceWebhook
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Webhook processed
+        '401':
+          description: Invalid webhook signature
+
+  # ───────────────────────────── HEALTH ───────────────────────────
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      operationId: healthCheck
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+
+  /health/ready:
+    get:
+      tags: [Health]
+      summary: Readiness check
+      operationId: readinessCheck
+      security: []
+      responses:
+        '200':
+          description: Service is ready
+        '503':
+          description: Service is not ready
+
+# ═══════════════════════════ COMPONENTS ═══════════════════════════
+
+components:
+  parameters:
+    ApiKey:
+      name: X-API-Key
+      in: header
+      required: true
+      schema:
+        type: string
+      description: API key for authentication
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        maxLength: 255
+      description: Unique key for idempotent requests (required for POST operations, expires after 24h)
+    ClientId:
+      name: clientId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    PlanId:
+      name: planId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    SubscriptionId:
+      name: subscriptionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    InvoiceId:
+      name: invoiceId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        default: 0
+        minimum: 0
+    Size:
+      name: size
+      in: query
+      schema:
+        type: integer
+        default: 20
+        minimum: 1
+        maximum: 100
+    Sort:
+      name: sort
+      in: query
+      schema:
+        type: string
+        default: createdAt,desc
+
+  schemas:
+    # ──────────── CLIENT SCHEMAS ─────────────
+    RegisterClientRequest:
+      type: object
+      required: [projectName, contactEmail]
+      properties:
+        projectName:
+          type: string
+          example: eTalente
+        contactEmail:
+          type: string
+          format: email
+          example: admin@etalente.co.za
+        settings:
+          type: object
+          description: Per-tenant configuration
+
+    ClientRegistrationResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectName:
+          type: string
+        apiKey:
+          type: string
+          description: Full API key (shown only once)
+        apiKeyPrefix:
+          type: string
+          description: Key prefix for identification
+        status:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    ApiKeyRotationResponse:
+      type: object
+      properties:
+        apiKey:
+          type: string
+          description: New API key (shown only once)
+        apiKeyPrefix:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        gracePeriodEnds:
+          type: string
+          format: date-time
+          description: Old key remains valid until this time
+
+    ApiKeySummaryResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        keyPrefix:
+          type: string
+          description: First characters of the key for identification (e.g., bk_abc123)
+        status:
+          type: string
+          enum: [active, expired, revoked]
+        lastUsedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+
+    # ──────────────── PLAN SCHEMAS ───────────────
+    CreatePlanRequest:
+      type: object
+      required: [name, billingCycle, priceCents]
+      properties:
+        name:
+          type: string
+          example: Premium Plan
+        description:
+          type: string
+          example: Full access with priority support
+        billingCycle:
+          type: string
+          enum: [monthly, quarterly, yearly]
+          example: monthly
+        priceCents:
+          type: integer
+          minimum: 0
+          description: Price in smallest currency unit (cents)
+          example: 49900
+        currency:
+          type: string
+          default: ZAR
+        features:
+          type: object
+          example:
+            max_users: 10
+            storage_gb: 50
+        limits:
+          type: object
+          example:
+            api_calls_per_day: 1000
+        trialDays:
+          type: integer
+          default: 0
+          example: 14
+        sortOrder:
+          type: integer
+          default: 0
+
+    UpdatePlanRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        features:
+          type: object
+        limits:
+          type: object
+        status:
+          type: string
+          enum: [draft, active, archived]
+        sortOrder:
+          type: integer
+
+    PlanResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        billingCycle:
+          type: string
+        priceCents:
+          type: integer
+        currency:
+          type: string
+        features:
+          type: object
+        limits:
+          type: object
+        trialDays:
+          type: integer
+        status:
+          type: string
+        sortOrder:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    PaginatedPlanResponse:
+      type: object
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlanResponse'
+        page:
+          type: integer
+        size:
+          type: integer
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+
+    # ──────────── SUBSCRIPTION SCHEMAS ───────────
+    CreateSubscriptionRequest:
+      type: object
+      required: [externalCustomerId, planId]
+      properties:
+        externalCustomerId:
+          type: string
+          description: Customer ID in your system
+          example: cust_12345
+        externalCustomerEmail:
+          type: string
+          format: email
+          example: user@example.co.za
+        planId:
+          type: string
+          format: uuid
+        couponCode:
+          type: string
+          description: Optional coupon code to apply
+        trialDays:
+          type: integer
+          description: Override plan's trial days (optional)
+        metadata:
+          type: object
+
+    UpdateSubscriptionRequest:
+      type: object
+      properties:
+        cancelAtPeriodEnd:
+          type: boolean
+        metadata:
+          type: object
+
+    CancelSubscriptionRequest:
+      type: object
+      properties:
+        immediately:
+          type: boolean
+          default: false
+          description: If true, cancel now. If false, cancel at period end.
+        reason:
+          type: string
+        feedback:
+          type: string
+
+    ChangePlanRequest:
+      type: object
+      required: [newPlanId]
+      properties:
+        newPlanId:
+          type: string
+          format: uuid
+        prorate:
+          type: boolean
+          default: true
+
+    ApplyCouponRequest:
+      type: object
+      required: [couponCode]
+      properties:
+        couponCode:
+          type: string
+
+    SubscriptionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        externalCustomerId:
+          type: string
+        externalCustomerEmail:
+          type: string
+        plan:
+          $ref: '#/components/schemas/PlanResponse'
+        coupon:
+          $ref: '#/components/schemas/CouponResponse'
+        status:
+          $ref: '#/components/schemas/SubscriptionStatus'
+        currentPeriodStart:
+          type: string
+          format: date-time
+        currentPeriodEnd:
+          type: string
+          format: date-time
+        cancelAtPeriodEnd:
+          type: boolean
+        canceledAt:
+          type: string
+          format: date-time
+        cancellationReason:
+          type: string
+          description: Reason for cancellation (e.g., too_expensive, missing_features, switched_provider)
+        cancellationFeedback:
+          type: string
+          description: Free-text feedback provided by the customer at cancellation
+        trialStart:
+          type: string
+          format: date-time
+        trialEnd:
+          type: string
+          format: date-time
+        paymentSetupUrl:
+          type: string
+          format: uri
+          description: URL to redirect the customer to for payment method setup
+        metadata:
+          type: object
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    PaginatedSubscriptionResponse:
+      type: object
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/SubscriptionResponse'
+        page:
+          type: integer
+        size:
+          type: integer
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+
+    SubscriptionStatus:
+      type: string
+      enum: [trialing, active, past_due, canceled, unpaid, incomplete, incomplete_expired, paused]
+
+    # ──────────────── INVOICE SCHEMAS ────────────
+    InvoiceResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        subscriptionId:
+          type: string
+          format: uuid
+        invoiceNumber:
+          type: string
+        subtotalCents:
+          type: integer
+          description: Amount before discount and tax
+        discountCents:
+          type: integer
+          description: Coupon discount amount applied
+        taxRate:
+          type: number
+          format: decimal
+          description: Tax rate applied (e.g., 15.00 for SA VAT)
+          example: 15.00
+        taxAmountCents:
+          type: integer
+          description: Calculated tax amount in cents
+        amountCents:
+          type: integer
+          description: Total amount including tax (subtotalCents - discountCents + taxAmountCents)
+        amountDueCents:
+          type: integer
+        amountPaidCents:
+          type: integer
+        currency:
+          type: string
+        status:
+          $ref: '#/components/schemas/InvoiceStatus'
+        invoicePdfUrl:
+          type: string
+        hostedInvoiceUrl:
+          type: string
+        periodStart:
+          type: string
+          format: date-time
+        periodEnd:
+          type: string
+          format: date-time
+        dueDate:
+          type: string
+          format: date-time
+        paidAt:
+          type: string
+          format: date-time
+        retryCount:
+          type: integer
+          description: Number of payment attempts made for this invoice (dunning)
+        lineItems:
+          type: array
+          description: Invoice line items with per-item tax breakdown (SARS compliance)
+          items:
+            $ref: '#/components/schemas/InvoiceLineItemResponse'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    PaginatedInvoiceResponse:
+      type: object
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvoiceResponse'
+        page:
+          type: integer
+        size:
+          type: integer
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+
+    UpcomingInvoiceResponse:
+      type: object
+      properties:
+        amountDueCents:
+          type: integer
+        currency:
+          type: string
+        periodStart:
+          type: string
+          format: date-time
+        periodEnd:
+          type: string
+          format: date-time
+        lineItems:
+          type: array
+          items:
+            type: object
+            properties:
+              description:
+                type: string
+              amountCents:
+                type: integer
+              quantity:
+                type: integer
+
+    InvoiceStatus:
+      type: string
+      enum: [draft, open, paid, void, uncollectible]
+
+    InvoiceLineItemResponse:
+      type: object
+      description: Individual line item on an invoice (SARS-compliant tax breakdown)
+      properties:
+        id:
+          type: string
+          format: uuid
+        description:
+          type: string
+          example: Premium Plan — Monthly subscription
+        quantity:
+          type: integer
+          example: 1
+        unitAmountCents:
+          type: integer
+          description: Unit price in cents before tax
+          example: 49900
+        taxRate:
+          type: number
+          format: decimal
+          description: Tax rate for this line item (e.g., 15.00 for SA VAT)
+          example: 15.00
+        taxAmountCents:
+          type: integer
+          description: Tax amount in cents for this line item
+          example: 7485
+        totalCents:
+          type: integer
+          description: Total for this line item (quantity * unitAmountCents + taxAmountCents)
+          example: 57385
+
+    # ──────────────── COUPON SCHEMAS ─────────────
+    CreateCouponRequest:
+      type: object
+      required: [code, discountType, discountValue]
+      properties:
+        code:
+          type: string
+          example: SUMMER2026
+        name:
+          type: string
+          example: Summer Sale Discount
+        discountType:
+          type: string
+          enum: [percent, fixed]
+        discountValue:
+          type: integer
+          description: Percent (1-100) or fixed amount in cents
+          example: 20
+        currency:
+          type: string
+          default: ZAR
+        duration:
+          type: string
+          enum: [once, repeating, forever]
+          default: once
+        durationMonths:
+          type: integer
+          description: Required if duration is 'repeating'
+        maxRedemptions:
+          type: integer
+          description: Maximum number of times this coupon can be redeemed (null = unlimited)
+        appliesToPlans:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: Plan IDs this coupon applies to (null/empty = all plans)
+        validFrom:
+          type: string
+          format: date-time
+        validUntil:
+          type: string
+          format: date-time
+
+    ValidateCouponRequest:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+        planId:
+          type: string
+          format: uuid
+          description: Optional plan ID to check applicability
+
+    CouponValidationResponse:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        coupon:
+          $ref: '#/components/schemas/CouponResponse'
+        discountAmountCents:
+          type: integer
+          description: Calculated discount amount for the given plan
+        errorCode:
+          type: string
+          description: Error code if invalid (COUPON_NOT_FOUND, COUPON_EXPIRED, COUPON_EXHAUSTED, COUPON_NOT_APPLICABLE)
+
+    CouponResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+        name:
+          type: string
+        discountType:
+          type: string
+        discountValue:
+          type: integer
+        currency:
+          type: string
+        duration:
+          type: string
+        durationMonths:
+          type: integer
+        maxRedemptions:
+          type: integer
+        redemptionCount:
+          type: integer
+        status:
+          type: string
+        validFrom:
+          type: string
+          format: date-time
+        validUntil:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+
+    PaginatedCouponResponse:
+      type: object
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/CouponResponse'
+        page:
+          type: integer
+        size:
+          type: integer
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+
+    # ──────────────── USAGE SCHEMAS ──────────────
+    BillingUsageResponse:
+      type: object
+      properties:
+        periodStart:
+          type: string
+          format: date
+        periodEnd:
+          type: string
+          format: date
+        subscriptionsCreated:
+          type: integer
+        subscriptionsCanceled:
+          type: integer
+        paymentsProcessed:
+          type: integer
+        paymentsFailed:
+          type: integer
+        totalPaymentVolumeCents:
+          type: integer
+          format: int64
+        invoicesGenerated:
+          type: integer
+        webhookCalls:
+          type: integer
+        apiCalls:
+          type: integer
+
+    UsageReportResponse:
+      type: object
+      properties:
+        periodStart:
+          type: string
+          format: date
+        periodEnd:
+          type: string
+          format: date
+        summary:
+          $ref: '#/components/schemas/BillingUsageResponse'
+        dailyBreakdown:
+          type: array
+          items:
+            type: object
+            properties:
+              date:
+                type: string
+                format: date
+              apiCalls:
+                type: integer
+              subscriptionsCreated:
+                type: integer
+              paymentsProcessed:
+                type: integer
+              paymentVolumeCents:
+                type: integer
+                format: int64
+        estimatedCost:
+          type: number
+          format: decimal
+
+    # ──────────────── WEBHOOK SCHEMAS ────────────
+    CreateWebhookConfigRequest:
+      type: object
+      required: [url, events]
+      properties:
+        url:
+          type: string
+          format: uri
+          example: https://etalente.co.za/webhooks/billing
+        events:
+          type: array
+          items:
+            type: string
+          example: [subscription.created, invoice.paid]
+
+    UpdateWebhookConfigRequest:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum: [active, disabled]
+
+    WebhookConfigResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        url:
+          type: string
+        events:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+        failureCount:
+          type: integer
+        lastSuccessAt:
+          type: string
+          format: date-time
+        lastFailureAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    # ──────────────── COMMON SCHEMAS ─────────────
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: object
+            requestId:
+              type: string
+            timestamp:
+              type: string
+              format: date-time
+
+  responses:
+    ValidationError:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Invalid or missing API key
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InvalidState:
+      description: Operation not valid for the current resource state
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+    AdminAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Admin JWT token for tenant management operations
+
+security:
+  - ApiKeyAuth: []

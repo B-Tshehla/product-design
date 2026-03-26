@@ -1,0 +1,1299 @@
+openapi: 3.0.3
+info:
+  title: Payment Service API
+  description: |
+    Provider-agnostic payment processing API for the Enviro Payment Gateway Platform.
+    
+    ## Authentication
+    All tenant-scoped endpoints require:
+    - `X-API-Key` header: Your API key
+    - `X-Tenant-ID` header: Your tenant UUID
+    
+    Admin endpoints (tenant management) require admin-level authentication.
+    
+    ## Idempotency
+    All POST endpoints that create payments or refunds **require** an `Idempotency-Key` header.
+    Duplicate requests with the same key and parameters return the cached response. Keys expire after 24 hours.
+    
+    ## Multi-Tenancy
+    All data is isolated per tenant via PostgreSQL Row-Level Security. You can only access
+    your own tenant's data.
+    
+    ## Currency
+    Default currency is ZAR (South African Rand). Amounts are in major units (Rands), not cents.
+  version: 1.0.0
+  contact:
+    name: Enviro Platform Team
+
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local development
+  - url: https://payments-dev.enviro.co.za/api/v1
+    description: Development
+  - url: https://payments-staging.enviro.co.za/api/v1
+    description: Staging
+  - url: https://payments.enviro.co.za/api/v1
+    description: Production
+
+tags:
+  - name: Payments
+    description: Create and manage payments
+  - name: Payment Methods
+    description: Tokenised payment method management
+  - name: Refunds
+    description: Create and track refunds
+  - name: Tenants
+    description: Tenant registration and management (admin)
+  - name: Webhooks
+    description: Outgoing webhook configuration
+  - name: Provider Webhooks
+    description: Incoming webhooks from payment providers
+  - name: Health
+    description: Health check endpoints
+
+paths:
+  # ─────────────────────────── PAYMENTS ───────────────────────────
+  /payments:
+    post:
+      tags: [Payments]
+      summary: Create a payment
+      description: |
+        Initiate a new payment via the configured provider. The payment may return
+        immediately as `succeeded` or `failed`, or may require further action
+        (`requires_action` for 3DS, `processing` for async providers).
+      operationId: createPayment
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePaymentRequest'
+      responses:
+        '201':
+          description: Payment created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/IdempotencyConflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+        '504':
+          $ref: '#/components/responses/ProviderTimeout'
+    get:
+      tags: [Payments]
+      summary: List payments
+      description: List payments with optional filters. Results are paginated.
+      operationId: listPayments
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - name: customerEmail
+          in: query
+          schema:
+            type: string
+            format: email
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/PaymentStatus'
+        - name: paymentType
+          in: query
+          schema:
+            $ref: '#/components/schemas/PaymentType'
+        - name: provider
+          in: query
+          schema:
+            type: string
+        - name: fromDate
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: toDate
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: Paginated list of payments
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedPaymentResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /payments/{paymentId}:
+    get:
+      tags: [Payments]
+      summary: Get payment by ID
+      operationId: getPayment
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/PaymentId'
+      responses:
+        '200':
+          description: Payment details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /payments/{paymentId}/cancel:
+    post:
+      tags: [Payments]
+      summary: Cancel a payment
+      description: Cancel a payment that is in `pending` or `requires_action` status.
+      operationId: cancelPayment
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/PaymentId'
+      responses:
+        '200':
+          description: Payment canceled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/InvalidState'
+
+  # ─────────────────────── PAYMENT METHODS ────────────────────────
+  /payment-methods:
+    post:
+      tags: [Payment Methods]
+      summary: Create a payment method
+      description: |
+        Tokenise a new payment method via the provider. The full card/account details
+        are sent to the provider — only metadata (last4, brand, expiry) is stored locally.
+      operationId: createPaymentMethod
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePaymentMethodRequest'
+      responses:
+        '201':
+          description: Payment method created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentMethodResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+    get:
+      tags: [Payment Methods]
+      summary: List payment methods
+      description: List payment methods for a customer.
+      operationId: listPaymentMethods
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - name: customerId
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Customer ID in your system
+      responses:
+        '200':
+          description: List of payment methods
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PaymentMethodResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /payment-methods/{paymentMethodId}:
+    get:
+      tags: [Payment Methods]
+      summary: Get payment method by ID
+      operationId: getPaymentMethod
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/PaymentMethodId'
+      responses:
+        '200':
+          description: Payment method details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentMethodResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [Payment Methods]
+      summary: Update payment method
+      description: Update payment method metadata (not the token itself).
+      operationId: updatePaymentMethod
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/PaymentMethodId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePaymentMethodRequest'
+      responses:
+        '200':
+          description: Payment method updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentMethodResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Payment Methods]
+      summary: Delete payment method
+      description: Soft-delete the payment method locally and remove from provider.
+      operationId: deletePaymentMethod
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/PaymentMethodId'
+      responses:
+        '204':
+          description: Payment method deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /payment-methods/{paymentMethodId}/set-default:
+    post:
+      tags: [Payment Methods]
+      summary: Set as default payment method
+      description: Set this payment method as the default for the customer.
+      operationId: setDefaultPaymentMethod
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/PaymentMethodId'
+        - name: customerId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Default payment method set
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentMethodResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ──────────────────────────── REFUNDS ───────────────────────────
+  /payments/{paymentId}/refunds:
+    post:
+      tags: [Refunds]
+      summary: Create a refund
+      description: |
+        Create a full or partial refund for a succeeded payment. The total refunded
+        amount across all refunds cannot exceed the original payment amount.
+      operationId: createRefund
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/PaymentId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRefundRequest'
+      responses:
+        '201':
+          description: Refund created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/IdempotencyConflict'
+        '422':
+          description: Refund amount exceeds available balance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+        '504':
+          $ref: '#/components/responses/ProviderTimeout'
+    get:
+      tags: [Refunds]
+      summary: List refunds
+      operationId: listRefunds
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/PaymentId'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/RefundStatus'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Paginated list of refunds
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedRefundResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /refunds/{refundId}:
+    get:
+      tags: [Refunds]
+      summary: Get refund by ID
+      operationId: getRefund
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/RefundId'
+      responses:
+        '200':
+          description: Refund details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ──────────────────────────── TENANTS ───────────────────────────
+  /tenants:
+    post:
+      tags: [Tenants]
+      summary: Register a new tenant
+      description: |
+        Register a new client project as a tenant. Returns the API key and secret
+        (shown only once). Admin authentication required.
+      operationId: registerTenant
+      security:
+        - AdminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterTenantRequest'
+      responses:
+        '201':
+          description: Tenant registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantRegistrationResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+
+  /tenants/{tenantId}:
+    get:
+      tags: [Tenants]
+      summary: Get tenant details
+      operationId: getTenant
+      security:
+        - AdminAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TenantIdPath'
+      responses:
+        '200':
+          description: Tenant details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [Tenants]
+      summary: Update tenant configuration
+      operationId: updateTenant
+      security:
+        - AdminAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TenantIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTenantRequest'
+      responses:
+        '200':
+          description: Tenant updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /tenants/{tenantId}/rotate-api-key:
+    post:
+      tags: [Tenants]
+      summary: Rotate API key
+      description: |
+        Generate a new API key for the tenant. The old key remains valid for 24 hours
+        (grace period). Returns the new key plaintext (shown only once).
+      operationId: rotateApiKey
+      security:
+        - AdminAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TenantIdPath'
+      responses:
+        '200':
+          description: New API key generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyRotationResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ──────────────────────────── WEBHOOKS ──────────────────────────
+  /webhooks:
+    post:
+      tags: [Webhooks]
+      summary: Create webhook configuration
+      description: Register an HTTPS endpoint to receive webhook notifications.
+      operationId: createWebhookConfig
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWebhookConfigRequest'
+      responses:
+        '201':
+          description: Webhook config created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookConfigResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    get:
+      tags: [Webhooks]
+      summary: List webhook configurations
+      operationId: listWebhookConfigs
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+      responses:
+        '200':
+          description: List of webhook configs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WebhookConfigResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /webhooks/{webhookId}:
+    put:
+      tags: [Webhooks]
+      summary: Update webhook configuration
+      operationId: updateWebhookConfig
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - name: webhookId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateWebhookConfigRequest'
+      responses:
+        '200':
+          description: Webhook config updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookConfigResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Webhooks]
+      summary: Delete webhook configuration
+      operationId: deleteWebhookConfig
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - name: webhookId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Webhook config deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ──────────────────── PROVIDER WEBHOOKS (PUBLIC) ────────────────
+  /webhooks/provider/{providerCode}:
+    post:
+      tags: [Provider Webhooks]
+      summary: Receive provider webhook
+      description: |
+        Public endpoint for receiving webhooks from payment providers.
+        Each provider has its own signature verification mechanism.
+        No API key required — authentication is via provider signature.
+      operationId: receiveProviderWebhook
+      security: []  # No API key required — authenticated via provider signature
+      parameters:
+        - name: providerCode
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Provider identifier (e.g., peach_payments, ozow)
+          examples:
+            peach:
+              value: peach_payments
+            ozow:
+              value: ozow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Raw provider webhook payload (structure varies by provider)
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              description: Some providers POST form-encoded data
+      responses:
+        '200':
+          description: Webhook processed
+        '401':
+          description: Invalid webhook signature
+        '400':
+          description: Unrecognised provider or malformed payload
+
+  # ───────────────────────────── HEALTH ───────────────────────────
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      operationId: healthCheck
+      security: []  # Public endpoint
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /health/ready:
+    get:
+      tags: [Health]
+      summary: Readiness check
+      description: Returns 200 when the service is ready to accept traffic (DB, Redis, message broker connected).
+      operationId: readinessCheck
+      security: []  # Public endpoint
+      responses:
+        '200':
+          description: Service is ready
+        '503':
+          description: Service is not ready
+
+# ═══════════════════════════ COMPONENTS ═══════════════════════════
+
+components:
+  parameters:
+    TenantId:
+      name: X-Tenant-ID
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Tenant UUID
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        maxLength: 255
+      description: Required unique key for idempotent requests (expires after 24h)
+    PaymentId:
+      name: paymentId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    PaymentMethodId:
+      name: paymentMethodId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    RefundId:
+      name: refundId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    TenantIdPath:
+      name: tenantId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        default: 0
+        minimum: 0
+    Size:
+      name: size
+      in: query
+      schema:
+        type: integer
+        default: 20
+        minimum: 1
+        maximum: 100
+    Sort:
+      name: sort
+      in: query
+      schema:
+        type: string
+        default: createdAt,desc
+      description: "Sort field and direction (e.g., createdAt,desc)"
+
+  schemas:
+    # ──────────────── PAYMENT SCHEMAS ────────────────
+    CreatePaymentRequest:
+      type: object
+      required: [amount, currency, provider, paymentType, customerEmail, customerName]
+      properties:
+        amount:
+          type: number
+          format: decimal
+          minimum: 0.01
+          description: Payment amount in major currency units (e.g., 150.00 for R150)
+          example: 150.00
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          default: ZAR
+          example: ZAR
+        provider:
+          type: string
+          description: Provider to use for this payment (e.g., peach_payments, ozow)
+          example: peach_payments
+        paymentType:
+          $ref: '#/components/schemas/PaymentType'
+        paymentMethodId:
+          type: string
+          format: uuid
+          description: Existing payment method to charge (for recurring payments)
+        customerId:
+          type: string
+          description: Your internal customer identifier (links to payment methods)
+        customerEmail:
+          type: string
+          format: email
+          example: user@example.co.za
+        customerName:
+          type: string
+          example: John Doe
+        description:
+          type: string
+          example: Monthly subscription - Premium plan
+        returnUrl:
+          type: string
+          format: uri
+          description: URL to redirect after payment completion (for redirect flows)
+        cancelUrl:
+          type: string
+          format: uri
+          description: URL to redirect if payment is canceled
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Arbitrary key-value pairs
+          example:
+            orderId: ORD-12345
+            productLine: etalente
+
+    PaymentResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenantId:
+          type: string
+          format: uuid
+        paymentMethodId:
+          type: string
+          format: uuid
+        idempotencyKey:
+          type: string
+        provider:
+          type: string
+        providerPaymentId:
+          type: string
+        amount:
+          type: number
+          format: decimal
+        currency:
+          type: string
+        status:
+          $ref: '#/components/schemas/PaymentStatus'
+        paymentType:
+          $ref: '#/components/schemas/PaymentType'
+        metadata:
+          type: object
+        description:
+          type: string
+        customerId:
+          type: string
+        customerEmail:
+          type: string
+        customerName:
+          type: string
+        redirectUrl:
+          type: string
+          format: uri
+          description: URL to redirect the customer to (for hosted checkout / 3DS)
+        processedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    PaginatedPaymentResponse:
+      type: object
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaymentResponse'
+        page:
+          type: integer
+        size:
+          type: integer
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+        last:
+          type: boolean
+
+    PaymentStatus:
+      type: string
+      enum: [pending, processing, succeeded, failed, canceled, requires_action]
+
+    PaymentType:
+      type: string
+      enum: [one_time, recurring]
+
+    # ──────────── PAYMENT METHOD SCHEMAS ─────────────
+    CreatePaymentMethodRequest:
+      type: object
+      required: [customerId, provider, methodType]
+      properties:
+        customerId:
+          type: string
+          description: Customer ID in your system
+        provider:
+          type: string
+          description: Provider to tokenise with
+          example: peach_payments
+        methodType:
+          $ref: '#/components/schemas/PaymentMethodType'
+        returnUrl:
+          type: string
+          format: uri
+          description: Redirect URL after tokenisation (for hosted checkout flows)
+
+    UpdatePaymentMethodRequest:
+      type: object
+      properties:
+        isActive:
+          type: boolean
+
+    PaymentMethodResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenantId:
+          type: string
+          format: uuid
+        customerId:
+          type: string
+        provider:
+          type: string
+        methodType:
+          $ref: '#/components/schemas/PaymentMethodType'
+        cardDetails:
+          $ref: '#/components/schemas/CardDetails'
+        bankDetails:
+          $ref: '#/components/schemas/BankDetails'
+        isDefault:
+          type: boolean
+        isActive:
+          type: boolean
+        expiresAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    PaymentMethodType:
+      type: string
+      enum: [card, bank_account, digital_wallet]
+
+    CardDetails:
+      type: object
+      properties:
+        brand:
+          type: string
+          example: visa
+        last4:
+          type: string
+          example: "4242"
+        expMonth:
+          type: integer
+          example: 12
+        expYear:
+          type: integer
+          example: 2028
+        fingerprint:
+          type: string
+
+    BankDetails:
+      type: object
+      properties:
+        bankName:
+          type: string
+          example: FNB
+        accountType:
+          type: string
+          example: cheque
+        last4:
+          type: string
+          example: "7890"
+        branchCode:
+          type: string
+          example: "250655"
+
+    # ──────────────── REFUND SCHEMAS ─────────────────
+    CreateRefundRequest:
+      type: object
+      required: [amount]
+      properties:
+        amount:
+          type: number
+          format: decimal
+          minimum: 0.01
+          description: Refund amount (must not exceed remaining refundable amount)
+        reason:
+          type: string
+          description: Reason for the refund
+          example: Customer requested cancellation
+        metadata:
+          type: object
+          additionalProperties: true
+
+    RefundResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        paymentId:
+          type: string
+          format: uuid
+        tenantId:
+          type: string
+          format: uuid
+        idempotencyKey:
+          type: string
+        providerRefundId:
+          type: string
+        amount:
+          type: number
+          format: decimal
+        currency:
+          type: string
+        status:
+          $ref: '#/components/schemas/RefundStatus'
+        reason:
+          type: string
+        metadata:
+          type: object
+        processedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    PaginatedRefundResponse:
+      type: object
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/RefundResponse'
+        page:
+          type: integer
+        size:
+          type: integer
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+        last:
+          type: boolean
+
+    RefundStatus:
+      type: string
+      enum: [pending, processing, succeeded, failed, canceled]
+
+    # ──────────────── TENANT SCHEMAS ─────────────────
+    RegisterTenantRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          example: eTalente
+        processorConfig:
+          type: object
+          description: Per-provider credentials (encrypted at rest)
+          example:
+            peach_payments:
+              entity_id: "8ac7a4c..."
+              access_token: "OGFjN2..."
+        isActive:
+          type: boolean
+          default: true
+
+    TenantRegistrationResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        apiKey:
+          type: string
+          description: API key (shown only once)
+        apiSecret:
+          type: string
+          description: API secret (shown only once)
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+
+    TenantResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    UpdateTenantRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        processorConfig:
+          type: object
+        isActive:
+          type: boolean
+
+    ApiKeyRotationResponse:
+      type: object
+      properties:
+        apiKey:
+          type: string
+          description: New API key (shown only once)
+        apiKeyPrefix:
+          type: string
+          description: Key prefix for identification
+        gracePeriodEnds:
+          type: string
+          format: date-time
+          description: Old key remains valid until this time
+
+    # ──────────────── WEBHOOK SCHEMAS ────────────────
+    CreateWebhookConfigRequest:
+      type: object
+      required: [url, events]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: HTTPS endpoint URL
+          example: https://etalente.co.za/webhooks/payments
+        events:
+          type: array
+          items:
+            type: string
+          description: Event types to subscribe to
+          example: [payment.succeeded, payment.failed, refund.succeeded]
+
+    UpdateWebhookConfigRequest:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            type: string
+        isActive:
+          type: boolean
+
+    WebhookConfigResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenantId:
+          type: string
+          format: uuid
+        url:
+          type: string
+        events:
+          type: array
+          items:
+            type: string
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    # ──────────────── COMMON SCHEMAS ─────────────────
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: PAYMENT_NOT_FOUND
+            message:
+              type: string
+              example: Payment with ID pay_abc123 not found
+            details:
+              type: object
+            requestId:
+              type: string
+            timestamp:
+              type: string
+              format: date-time
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [UP, DOWN]
+        components:
+          type: object
+          properties:
+            db:
+              type: object
+              properties:
+                status:
+                  type: string
+            redis:
+              type: object
+              properties:
+                status:
+                  type: string
+            broker:
+              type: object
+              properties:
+                status:
+                  type: string
+
+  responses:
+    ValidationError:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Invalid or missing API key
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    IdempotencyConflict:
+      description: Idempotency key reused with different parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InvalidState:
+      description: Operation not valid for the current resource state
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RateLimited:
+      description: Rate limit exceeded
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds until rate limit resets
+        X-RateLimit-Limit:
+          schema:
+            type: integer
+        X-RateLimit-Remaining:
+          schema:
+            type: integer
+        X-RateLimit-Reset:
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ProviderError:
+      description: Payment provider returned an error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ProviderTimeout:
+      description: Payment provider did not respond in time (circuit breaker may be open)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+    AdminAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Admin-level authentication for tenant management endpoints
+
+security:
+  - ApiKeyAuth: []
