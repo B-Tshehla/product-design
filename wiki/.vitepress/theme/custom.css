@@ -1,0 +1,924 @@
+/* ============================================================
+   Investments Contracts API — Wiki Theme (Momentum Brand)
+   ============================================================
+   Brand: Momentum Investments
+   Primary: Stratos Navy #001950, Red Orange #FF3A30
+   Typography: Segoe UI
+   Icons: Lucide (Feather-style outline)
+   ============================================================ */
+
+/* --- Font Families (Momentum: Segoe UI) --- */
+:root {
+  --vp-font-family-base: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Inter', Roboto, sans-serif;
+  --vp-font-family-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+
+/* --- Momentum Brand Palette --- */
+:root {
+  --m-red: #D32F2F;
+  --m-red-orange: #FF3A30;
+  --m-red-light: #FFC9C7;
+  --m-pomegranate: #F44336;
+  --m-stratos: #001950;
+  --m-green: #32AB4D;
+  --m-green-light: #C8E6C9;
+  --m-mine-shaft: #333333;
+  --m-dove-gray: #616161;
+  --m-boulder: #767676;
+  --m-dusty-gray: #919191;
+}
+
+/* --- Color Palette (Light Mode Default) --- */
+:root {
+  --wiki-bg: #ffffff;
+  --wiki-bg-elevated: #f6f8fa;
+  --wiki-bg-card: #eef1f5;
+  --wiki-accent: var(--m-red-orange);
+  --wiki-accent-hover: var(--m-red);
+  --wiki-text: var(--m-mine-shaft);
+  --wiki-text-muted: var(--m-dove-gray);
+  --wiki-heading: var(--m-stratos);
+  --wiki-border: #d0d7de;
+  --wiki-border-accent: var(--m-red-orange);
+
+  /* Mermaid diagram colors (light mode) */
+  --mermaid-node-fill: #fef5f5;
+  --mermaid-node-border: var(--m-red-orange);
+  --mermaid-node-text: var(--m-mine-shaft);
+  --mermaid-bg: #f6f8fa;
+  --mermaid-edge-color: var(--m-dove-gray);
+  --mermaid-edge-label-bg: #ffffff;
+  --mermaid-edge-label-text: var(--m-mine-shaft);
+  --mermaid-cluster-fill: #fff8f7;
+  --mermaid-cluster-border: #d0d7de;
+  --mermaid-activation-bg: #eef1f5;
+  --mermaid-actor-line: var(--m-dove-gray);
+
+  /* VitePress brand overrides (light) */
+  --vp-c-brand-1: var(--m-red-orange);
+  --vp-c-brand-2: var(--m-pomegranate);
+  --vp-c-brand-3: var(--m-red);
+  --vp-c-brand-soft: rgba(255, 58, 48, 0.08);
+}
+
+/* --- VitePress Dark Mode Variable Overrides --- */
+.dark {
+  --wiki-bg: #0d1117;
+  --wiki-bg-elevated: #161b22;
+  --wiki-bg-card: #2d333b;
+  --wiki-accent: #FF5A4F;
+  --wiki-accent-hover: #FF7B73;
+  --wiki-text: #e6edf3;
+  --wiki-text-muted: #8b949e;
+  --wiki-heading: #e6edf3;
+  --wiki-border: #30363d;
+  --wiki-border-accent: #FF5A4F;
+
+  /* Mermaid diagram colors (dark mode) */
+  --mermaid-node-fill: #2d333b;
+  --mermaid-node-border: #FF5A4F;
+  --mermaid-node-text: #e6edf3;
+  --mermaid-bg: #161b22;
+  --mermaid-edge-color: #8b949e;
+  --mermaid-edge-label-bg: #1c2333;
+  --mermaid-edge-label-text: #e6edf3;
+  --mermaid-cluster-fill: #161b22;
+  --mermaid-cluster-border: #30363d;
+  --mermaid-activation-bg: #1c2333;
+  --mermaid-actor-line: #8b949e;
+  --vp-c-bg: #0d1117;
+  --vp-c-bg-alt: #161b22;
+  --vp-c-bg-elv: #161b22;
+  --vp-c-bg-soft: #161b22;
+
+  --vp-c-text-1: #e6edf3;
+  --vp-c-text-2: #c9d1d9;
+  --vp-c-text-3: #8b949e;
+
+  --vp-c-brand-1: #FF5A4F;
+  --vp-c-brand-2: #FF7B73;
+  --vp-c-brand-3: #FF5A4F;
+  --vp-c-brand-soft: rgba(255, 90, 79, 0.14);
+
+  --vp-c-default-1: #30363d;
+  --vp-c-default-2: #21262d;
+  --vp-c-default-3: #161b22;
+  --vp-c-default-soft: rgba(48, 54, 61, 0.3);
+
+  --vp-c-divider: #21262d;
+  --vp-c-gutter: #1c2333;
+
+  --vp-sidebar-bg-color: #0d1117;
+
+  --vp-code-block-bg: #161b22;
+  --vp-code-tab-text-color: #8b949e;
+  --vp-code-tab-active-text-color: #e6edf3;
+  --vp-code-tab-hover-text-color: #e6edf3;
+  --vp-code-line-highlight-color: rgba(255, 90, 79, 0.08);
+  --vp-code-copy-code-bg: rgba(255, 90, 79, 0.12);
+  --vp-code-copy-code-hover-bg: rgba(255, 90, 79, 0.2);
+
+  --vp-custom-block-tip-border: #FF5A4F;
+  --vp-custom-block-tip-bg: rgba(255, 90, 79, 0.08);
+  --vp-custom-block-tip-text: #e6edf3;
+}
+
+/* --- Layout: Wider Content Area --- */
+.VPDoc .container {
+  max-width: 100% !important;
+}
+
+.VPDoc.has-aside .content-container {
+  max-width: 100% !important;
+}
+
+.vp-doc .container {
+  max-width: 100% !important;
+}
+
+/* Expand the main content column */
+.VPDoc:not(.has-sidebar) .content {
+  max-width: 100% !important;
+}
+
+.VPDoc .content {
+  max-width: 100% !important;
+  padding: 0 24px !important;
+}
+
+/* Override VitePress default content width constraints */
+:root {
+  --vp-layout-max-width: 1440px;
+}
+
+.VPContent .VPDoc {
+  padding: 32px 24px !important;
+}
+
+/* Ensure tables and diagrams don't get clipped */
+.vp-doc table {
+  display: table;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.vp-doc .table-wrapper,
+.vp-doc table {
+  overflow-x: auto;
+}
+
+/* Mermaid diagrams — allow full width with horizontal scroll */
+.mermaid svg {
+  max-width: none;
+  overflow: visible;
+}
+
+.mermaid {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+/* --- Navbar --- */
+.VPNav {
+  border-bottom: 1px solid var(--wiki-border) !important;
+}
+
+.VPNavBar {
+  background: var(--wiki-bg) !important;
+  backdrop-filter: blur(12px);
+}
+
+.VPNavBarTitle .title {
+  color: var(--wiki-text) !important;
+  font-weight: 600;
+}
+
+/* --- Sidebar --- */
+.VPSidebar {
+  background: var(--wiki-bg) !important;
+  border-right: 1px solid var(--wiki-border) !important;
+}
+
+.VPSidebarItem .text {
+  font-size: 0.88rem;
+  color: var(--wiki-text-muted);
+  transition: color 0.2s ease;
+}
+
+.VPSidebarItem .text:hover {
+  color: var(--wiki-text) !important;
+}
+
+.VPSidebarItem.is-active > .item > .link > .text {
+  color: var(--wiki-accent) !important;
+  font-weight: 600;
+}
+
+.VPSidebarItem.level-0 .text {
+  font-weight: 700;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--wiki-text-muted) !important;
+}
+
+/* --- Content Typography (Momentum: Segoe UI sizing) --- */
+.vp-doc h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  border-bottom: 2px solid var(--wiki-accent);
+  padding-bottom: 0.6rem;
+  margin-bottom: 1.5rem;
+  color: var(--wiki-heading);
+}
+
+.vp-doc h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  border-bottom: 1px solid var(--wiki-border);
+  padding-bottom: 0.4rem;
+  margin-top: 2.5rem;
+  margin-bottom: 1rem;
+  color: var(--wiki-heading);
+}
+
+.vp-doc h3 {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin-top: 2rem;
+  margin-bottom: 0.75rem;
+  color: var(--wiki-heading);
+}
+
+.vp-doc p {
+  line-height: 1.8;
+  color: var(--wiki-text);
+  margin-bottom: 1rem;
+}
+
+.vp-doc ul,
+.vp-doc ol {
+  padding-left: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.vp-doc li {
+  line-height: 1.75;
+  color: var(--wiki-text);
+  margin-bottom: 0.25rem;
+}
+
+/* --- Inline Code (Momentum red tint) --- */
+.vp-doc :not(pre) > code {
+  background: rgba(255, 58, 48, 0.06) !important;
+  color: var(--wiki-accent-hover) !important;
+  border-radius: 4px;
+  padding: 0.15em 0.4em;
+  font-size: 0.88em;
+  font-weight: 500;
+  border: 1px solid rgba(255, 58, 48, 0.12);
+}
+
+/* --- Code Blocks --- */
+.vp-doc div[class*='language-'] {
+  background: var(--wiki-bg-elevated) !important;
+  border: 1px solid var(--wiki-border);
+  border-radius: 8px;
+  margin: 1.2rem 0;
+}
+
+.vp-doc div[class*='language-'] code {
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.88rem;
+  line-height: 1.7;
+}
+
+.vp-doc div[class*='language-'] span.lang {
+  color: var(--wiki-text-muted) !important;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+
+/* --- Tables --- */
+.vp-doc table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+  font-size: 0.9rem;
+  display: block;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.vp-doc th {
+  background: var(--wiki-bg-elevated) !important;
+  color: var(--wiki-text-muted) !important;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  padding: 0.75rem 1rem;
+  border-bottom: 2px solid var(--wiki-border);
+  text-align: left;
+}
+
+.vp-doc td {
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid var(--wiki-border);
+}
+
+.vp-doc tr:nth-child(even) {
+  background: var(--vp-c-bg-alt, var(--wiki-bg-elevated));
+}
+
+.vp-doc tr:hover {
+  background: rgba(255, 58, 48, 0.04);
+}
+
+/* --- Mermaid Containers --- */
+.mermaid {
+  display: flex;
+  justify-content: center;
+  padding: 1.5rem 1rem;
+  margin: 1.5rem 0;
+  background: var(--wiki-bg-elevated);
+  border: 1px solid var(--wiki-border);
+  border-radius: 8px;
+  cursor: pointer;
+  position: relative;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.mermaid:hover {
+  border-color: var(--m-red-orange);
+  box-shadow: 0 0 0 1px var(--m-red-orange);
+}
+
+/* Expand hint icon (bottom-right corner) */
+.mermaid-expand-hint {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  color: var(--vp-c-text-2);
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  background: var(--wiki-bg-elevated);
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--wiki-border);
+}
+.mermaid-expand-hint::after {
+  content: 'Click to zoom';
+  white-space: nowrap;
+}
+.mermaid:hover .mermaid-expand-hint {
+  opacity: 0.8;
+}
+
+/* --- Mermaid SVG Theme Overrides (uses CSS variables for light/dark) --- */
+.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.mermaid .node rect,
+.mermaid .node circle,
+.mermaid .node ellipse,
+.mermaid .node polygon,
+.mermaid .node path {
+  fill: var(--mermaid-node-fill) !important;
+  stroke: var(--mermaid-node-border) !important;
+}
+
+.mermaid .node .label,
+.mermaid .nodeLabel,
+.mermaid .node text,
+.mermaid .label text {
+  fill: var(--mermaid-node-text) !important;
+  color: var(--mermaid-node-text) !important;
+}
+
+.mermaid .edgeLabel {
+  background-color: var(--mermaid-edge-label-bg) !important;
+  color: var(--mermaid-edge-label-text) !important;
+}
+
+.mermaid .edgeLabel rect {
+  fill: var(--mermaid-edge-label-bg) !important;
+  opacity: 1 !important;
+}
+
+.mermaid .edgeLabel span {
+  color: var(--mermaid-edge-label-text) !important;
+}
+
+.mermaid .edgePath .path {
+  stroke: var(--mermaid-edge-color) !important;
+}
+
+.mermaid .cluster rect {
+  fill: var(--mermaid-cluster-fill) !important;
+  stroke: var(--mermaid-cluster-border) !important;
+}
+
+.mermaid .cluster text {
+  fill: var(--mermaid-node-text) !important;
+}
+
+.mermaid marker path {
+  fill: var(--mermaid-edge-color) !important;
+  stroke: var(--mermaid-edge-color) !important;
+}
+
+.mermaid .actor {
+  fill: var(--mermaid-node-fill) !important;
+  stroke: var(--mermaid-node-border) !important;
+}
+
+.mermaid .actor text,
+.mermaid text.actor {
+  fill: var(--mermaid-node-text) !important;
+}
+
+.mermaid .note {
+  fill: var(--mermaid-node-fill) !important;
+  stroke: var(--mermaid-node-border) !important;
+}
+
+.mermaid .noteText,
+.mermaid .note text {
+  fill: var(--mermaid-node-text) !important;
+}
+
+.mermaid .activation {
+  fill: var(--mermaid-activation-bg) !important;
+  stroke: var(--mermaid-node-border) !important;
+}
+
+.mermaid .messageLine0,
+.mermaid .messageLine1 {
+  stroke: var(--mermaid-actor-line) !important;
+}
+
+.mermaid .messageText {
+  fill: var(--mermaid-node-text) !important;
+}
+
+.mermaid .loopText,
+.mermaid .loopText tspan {
+  fill: var(--mermaid-node-text) !important;
+}
+
+.mermaid .labelBox {
+  fill: var(--mermaid-node-fill) !important;
+  stroke: var(--mermaid-node-border) !important;
+}
+
+.mermaid .loopLine {
+  stroke: var(--mermaid-cluster-border) !important;
+}
+
+.mermaid .statediagram-state rect.divider {
+  fill: var(--mermaid-cluster-fill) !important;
+  stroke: var(--mermaid-cluster-border) !important;
+}
+
+/* --- Mermaid Zoom Hover Hint --- */
+.mermaid:hover {
+  border-color: var(--wiki-accent) !important;
+  box-shadow: 0 0 20px rgba(255, 58, 48, 0.15);
+}
+
+.mermaid[data-zoom-attached]::after {
+  content: '⤢ Click to zoom';
+  position: absolute;
+  bottom: 8px;
+  right: 12px;
+  font-size: 0.7rem;
+  color: var(--wiki-text-muted);
+  background: var(--wiki-bg-card);
+  padding: 2px 8px;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+  border: 1px solid var(--wiki-border);
+}
+
+.mermaid[data-zoom-attached]:hover::after {
+  opacity: 1;
+}
+
+/* --- Fullscreen Zoom Overlay (always dark backdrop) --- */
+.mermaid-zoom-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(13, 17, 23, 0.92);
+  backdrop-filter: blur(8px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+}
+
+/* Force dark theme on zoom overlay SVG regardless of page theme */
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg .node rect,
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg .node circle,
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg .node ellipse,
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg .node polygon,
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg .node path {
+  fill: #2d333b !important;
+  stroke: #FF5A4F !important;
+}
+
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg .node .label,
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg .nodeLabel,
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg .node text,
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg .label text,
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg .cluster text,
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg .actor text,
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg text.actor,
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg .noteText,
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg .note text,
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg .messageText,
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg .loopText,
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg .loopText tspan,
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg .edgeLabel span {
+  fill: #e6edf3 !important;
+  color: #e6edf3 !important;
+}
+
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg .edgeLabel {
+  background-color: #1c2333 !important;
+}
+
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg .edgeLabel rect {
+  fill: #1c2333 !important;
+}
+
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg .edgePath .path {
+  stroke: #8b949e !important;
+}
+
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg .cluster rect {
+  fill: #161b22 !important;
+  stroke: #30363d !important;
+}
+
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg marker path {
+  fill: #8b949e !important;
+  stroke: #8b949e !important;
+}
+
+/* Ensure foreignObject text content (Mermaid labels) renders in overlay */
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg foreignObject {
+  overflow: visible;
+}
+.mermaid-zoom-overlay .mermaid-zoom-svg-container svg foreignObject div {
+  color: #e6edf3 !important;
+}
+
+.mermaid-zoom-svg-container {
+  cursor: grab;
+  transition: transform 0.1s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mermaid-zoom-svg-container:active {
+  cursor: grabbing;
+}
+
+.mermaid-zoom-controls {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  background: var(--wiki-bg-card);
+  border: 1px solid var(--wiki-border);
+  border-radius: 12px;
+  padding: 8px 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  z-index: 10000;
+}
+
+.zoom-btn {
+  background: var(--wiki-bg-elevated);
+  border: 1px solid var(--wiki-border);
+  color: var(--wiki-text);
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.zoom-btn:hover {
+  background: var(--wiki-accent);
+  border-color: var(--wiki-accent);
+  color: white;
+  transform: scale(1.05);
+}
+
+/* --- Focus Mode --- */
+.focus-mode-toggle {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--wiki-bg-card);
+  border: 1px solid var(--wiki-border);
+  color: var(--wiki-text);
+  font-size: 1.2rem;
+  cursor: pointer;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.focus-mode-toggle:hover {
+  background: var(--wiki-accent);
+  border-color: var(--wiki-accent);
+  transform: scale(1.1);
+}
+
+body.focus-mode .VPSidebar,
+body.focus-mode .VPNav,
+body.focus-mode .VPDocAside {
+  display: none !important;
+}
+
+body.focus-mode .VPContent {
+  padding-left: 0 !important;
+}
+
+body.focus-mode .VPDoc .container {
+  max-width: 900px !important;
+  margin: 0 auto;
+}
+
+body.focus-mode .focus-mode-toggle {
+  background: var(--wiki-accent);
+  border-color: var(--wiki-accent);
+  box-shadow: 0 0 20px rgba(255, 58, 48, 0.4);
+}
+
+/* --- medium-zoom Overlay --- */
+.medium-zoom-overlay {
+  background: rgba(13, 17, 23, 0.92) !important;
+  backdrop-filter: blur(8px);
+}
+
+.medium-zoom-image--opened {
+  z-index: 9999;
+}
+
+/* --- Scrollbar Styling --- */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--wiki-bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--wiki-border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--wiki-text-muted);
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--wiki-border) var(--wiki-bg);
+}
+
+/* --- Links --- */
+.vp-doc a {
+  color: var(--wiki-accent) !important;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.2s ease;
+}
+
+.vp-doc a:hover {
+  color: var(--wiki-accent-hover) !important;
+  border-bottom-color: var(--wiki-accent-hover);
+}
+
+/* --- Custom Blocks --- */
+.vp-doc .custom-block {
+  border-radius: 8px;
+  border: 1px solid var(--wiki-border);
+  margin: 1.5rem 0;
+}
+
+.vp-doc .custom-block.tip {
+  border-color: var(--wiki-accent);
+  background: rgba(255, 58, 48, 0.04);
+}
+
+.vp-doc .custom-block.warning {
+  border-color: #d29922;
+  background: rgba(210, 153, 34, 0.06);
+}
+
+.vp-doc .custom-block.danger {
+  border-color: #f85149;
+  background: rgba(248, 81, 73, 0.06);
+}
+
+.vp-doc .custom-block.info {
+  border-color: #58a6ff;
+  background: rgba(88, 166, 255, 0.06);
+}
+
+/* ============================================================
+   Status Indicator Classes (replace emojis in tables/lists)
+   Usage: <span class="ok">Compliant</span>
+          <span class="fail">Non-compliant</span>
+          <span class="warn">Partial</span>
+          <span class="sev-red">Critical</span>
+   ============================================================ */
+
+/* Shared base for inline status badges */
+.ok, .fail, .warn, .partial,
+.sev-red, .sev-yellow, .sev-green {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+  font-size: 0.88em;
+  white-space: nowrap;
+}
+
+.ok::before, .fail::before, .warn::before, .partial::before,
+.sev-red::before, .sev-yellow::before, .sev-green::before {
+  content: '';
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  background-color: currentColor;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
+/* ✅ OK / Compliant / Pass */
+.ok {
+  color: var(--m-green);
+}
+.ok::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 11.08V12a10 10 0 1 1-5.93-9.14'/%3E%3Cpath d='m9 11 3 3L22 4'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 11.08V12a10 10 0 1 1-5.93-9.14'/%3E%3Cpath d='m9 11 3 3L22 4'/%3E%3C/svg%3E");
+}
+
+/* ❌ Fail / Non-compliant */
+.fail {
+  color: var(--m-red-orange);
+}
+.fail::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='m15 9-6 6'/%3E%3Cpath d='m9 9 6 6'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='m15 9-6 6'/%3E%3Cpath d='m9 9 6 6'/%3E%3C/svg%3E");
+}
+
+/* ⚠️ Warning / Partial */
+.warn, .partial {
+  color: #d29922;
+}
+.warn::before, .partial::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z'/%3E%3Cpath d='M12 9v4'/%3E%3Cpath d='M12 17h.01'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z'/%3E%3Cpath d='M12 9v4'/%3E%3Cpath d='M12 17h.01'/%3E%3C/svg%3E");
+}
+
+/* 🔴 Severity: Critical (red dot) */
+.sev-red {
+  color: var(--m-red-orange);
+}
+.sev-red::before {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  -webkit-mask-image: none;
+  mask-image: none;
+  background-color: var(--m-red-orange);
+}
+
+/* 🟡 Severity: Moderate (yellow dot) */
+.sev-yellow {
+  color: #d29922;
+}
+.sev-yellow::before {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  -webkit-mask-image: none;
+  mask-image: none;
+  background-color: #d29922;
+}
+
+/* 🟢 Severity: Low (green dot) */
+.sev-green {
+  color: var(--m-green);
+}
+.sev-green::before {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  -webkit-mask-image: none;
+  mask-image: none;
+  background-color: var(--m-green);
+}
+
+/* --- Icon Utility Classes --- */
+.icon-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Heading icons */
+.vp-doc h2 .wiki-icon,
+.vp-doc h3 .wiki-icon {
+  vertical-align: -0.1em;
+  opacity: 0.85;
+  color: var(--wiki-accent);
+}
+
+.vp-doc h1 .wiki-icon {
+  vertical-align: -0.1em;
+  color: var(--wiki-accent);
+}
+
+/* --- Momentum-branded Badge --- */
+.badge-momentum {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(255, 58, 48, 0.08);
+  color: var(--wiki-accent);
+  border: 1px solid rgba(255, 58, 48, 0.2);
+}
+
+.badge-momentum.green {
+  background: rgba(50, 171, 77, 0.08);
+  color: var(--m-green);
+  border-color: rgba(50, 171, 77, 0.2);
+}
+
+.badge-momentum.yellow {
+  background: rgba(210, 153, 34, 0.08);
+  color: #d29922;
+  border-color: rgba(210, 153, 34, 0.2);
+}
+
+.badge-momentum.blue {
+  background: rgba(0, 25, 80, 0.06);
+  color: var(--m-stratos);
+  border-color: rgba(0, 25, 80, 0.15);
+}
+.dark .badge-momentum.blue {
+  background: rgba(88, 166, 255, 0.08);
+  color: #58a6ff;
+  border-color: rgba(88, 166, 255, 0.2);
+}
